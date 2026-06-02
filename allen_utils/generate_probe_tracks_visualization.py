@@ -87,34 +87,51 @@ def find_session_folder(base: Path, m_name: str, date_val) -> Path | None:
     return candidates[0]
 
 
-def generate_brain_animation(scene, output_folder: Path, fig_stem: str, camera_view: str, params: dict) -> None:
-    anim_params = params.get('animation', {})
-    fps      = anim_params.get('fps', 30)
-    duration = anim_params.get('duration', 8)
-    n_frames = fps * duration
-    az_step  = 360.0 / n_frames
+def generate_brain_animation(scene, output_folder: Path, fig_stem: str, camera_view: str, params: dict, camera: dict) -> None:
+    from brainrender.camera import set_camera
 
-    el_step = -0.1 if camera_view == 'top' else 0
+    anim_params = params.get('animation', {})
+    fps        = anim_params.get('fps', 30)
+    duration   = anim_params.get('duration', 8)
+    video_zoom = anim_params.get('zoom', 0.8)
+    n_frames   = fps * duration
+    az_step    = 360.0 / n_frames
+    el_step    = -0.1 if camera_view == 'top' else 0
 
     def make_frame(scene, frame_number, *args, **kwargs):
-        scene.plotter.camera.Azimuth(az_step)
-        if el_step:
-            scene.plotter.camera.Elevation(el_step)
+        if frame_number == 0:
+            set_camera(scene, camera)
+            scene.plotter.camera.Zoom(video_zoom)
+        if camera_view in ['top','angled']:
+            scene.plotter.camera.Roll(az_step)
+        else:
+            scene.plotter.camera.Azimuth(az_step)
+        #if el_step:
+        #    scene.plotter.camera.Elevation(el_step)
 
     video_name = f"{fig_stem}_animation"
     print(f"  Rendering animation ({camera_view}): {n_frames} frames @ {fps} fps")
 
-    # VideoMaker/ffmpeg cannot use UNC paths as working directory on Windows.
-    # Render to a local temp folder, then copy to the NAS output folder.
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    tmp_dir = tempfile.mkdtemp()
+    try:
         vm = VideoMaker(scene, tmp_dir, video_name, make_frame_func=make_frame)
         vm.make_video(duration=duration, fps=fps)
+
+        saved_files = list(Path(tmp_dir).iterdir())
+        print(f"  Files in tmp_dir: {saved_files}")
 
         src  = Path(tmp_dir) / f"{video_name}.mp4"
         dest = output_folder / f"{video_name}.mp4"
         shutil.copy2(src, dest)
         print(f"  Animation saved → {dest}")
-        return
+    except Exception as e:
+        print(f"  Animation error: {e}")
+    finally:
+        import time
+        time.sleep(1)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return
 
 
 def generate_brain_visualization(params):
@@ -164,8 +181,7 @@ def generate_brain_visualization(params):
 
     # Probe and mouse metadata
     probe_info_df = pd.read_excel(params['probe_info_path'])
-    print(len(probe_info_df))
-    print(len(probe_info_df))
+    probe_info_df = probe_info_df[probe_info_df['valid']==1]
     probe_info_df['day_of_recording'] = probe_info_df['day_of_recording'].astype(int)
     probe_info_df = probe_info_df[probe_info_df['day_of_recording'].isin(days)]
     print(f"Probe entries after day filter {days}: {len(probe_info_df)}")
@@ -188,6 +204,7 @@ def generate_brain_visualization(params):
 
     probe_arrays_total     = []
     mouse_list_sub_in_plot = []
+
 
     for m_name in mouse_list_sub:
         print(f"── Mouse: {m_name}")
@@ -313,7 +330,7 @@ def generate_brain_visualization(params):
     scene.screenshot(name=fig_name, scale=params['scale'])
 
     if params.get('animate', False):
-        generate_brain_animation(scene, output_folder_path, fig_stem, camera_view, params)
+        generate_brain_animation(scene, output_folder_path, fig_stem, camera_view, params, camera)
 
     scene.close()
 
@@ -334,7 +351,7 @@ params = {
             "pos": (5053.37, 2365.62, -19213.1),
             "focal_point": (6587.84, 3849.09, -5688.16),
             "viewup": (-0.0169435, -0.993686, 0.110913),
-            "roll": 178.319,
+            "roll": 180,
             "distance": 13692.3,
             "clipping_range": (1055.19, 29632.9),
         },
@@ -375,12 +392,14 @@ params = {
     'animation': {
         'fps':      30,        # frames per second
         'duration': 8,         # seconds for a full 360° rotation (longer = slower)
+        'zoom': 0.2,  # adjust per view if needed
+
     },
 }
 
 if __name__ == "__main__":
-    color_by_sweep = ['reward_group', 'none', 'target', 'experimenter']
-    camera_views   = ['sagittal', 'frontal', 'top', 'angled']
+    color_by_sweep = ['target_area', 'experimenter']
+    camera_views   = ['top', 'angled', 'frontal', 'sagittal']
     file_formats   = ['png', 'svg']
     for color in color_by_sweep:
         params['color_by'] = color
