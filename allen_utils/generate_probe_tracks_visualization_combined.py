@@ -17,9 +17,6 @@ import brainrender
 from brainrender import Scene
 from brainrender.actors import Points
 
-# TODO: make animated visualization of dataset, make a video
-# TODO: update for day and using joint excel + add paths
-# TODO: embed in allen_utils
 
 brainrender.settings.SHOW_AXES = False
 brainrender.settings.ROOT_ALPHA = 0.1

@@ -17,7 +17,7 @@ import re
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
-
+from scipy.spatial import cKDTree
 
 def get_cortical_areas():
     """
@@ -68,9 +68,10 @@ def get_excluded_areas():
                       "sptV", "sm", "st", "SEZ", "scp", "dscp", "csc", "scwm", "sup", "tsp", "lfbst", "V3", "tb", "Vn",
                       "IVn", "uf", "Xn", "vhc", "sctv", "vtd", "VS", "vVIIIn", "VIIIn", "von",
                       'VL', 'I',
-                      'nan'
+                      'nan',
                       ]
-    return excluded_areas
+    ignored_areas = ['ND', 'VISC', 'SPP-ll', 'GU', 'HA', 'HY', 'MA', 'NOT', 'P'] #areas to ignore because too few neurons
+    return excluded_areas + ignored_areas
 
 
 
@@ -90,6 +91,7 @@ def generalize_region(region):
         "Ai": "AI",
         "AMd":"ATN",
         "AMv":"ATN",
+        "AM":"ATN",
         "AON":"OLF",
         "APN":"APN",
         "AUD": "AUD",
@@ -100,9 +102,9 @@ def generalize_region(region):
         "CEA": "CEA",
         "CL": "ILM",
         "CM":"ILM",
-        "CTXsp": "EP",
+        "CTXsp": "CTXsp",
         "DG": "DG",
-        "Eth": "LAT",
+        "Eth": "VP",
         "EPd": "EP",
         "EPv": "EP",
         'HPF':'HPF',
@@ -111,12 +113,13 @@ def generalize_region(region):
         "IGL":"LGN",
         "IntG":"LGN",
         "INC":"PAG",
-        "LD":"LGN",
+        "LD":"ATN",
         "LGd": "LGN",
         "LGv": "LGN",
+        "LP": "LGN",
         "LH":"HA",
         "LS": "LS",
-        "LT": "MY",
+        "LT": "MB",
         "MD":"MED",
         "MH":"HA",
         "MS":"PAL",
@@ -129,30 +132,39 @@ def generalize_region(region):
         "NPC":"MB",
         "ORB": "ORB",
         "PAL": "PAL",
+        "PCN": "ILM",
+        "PF": "ILM",
         "PIL":"ILM", # confirm, also, use DORpm vs DORsm ? PIL-PP in lit.
         "PIR":"OLF",
         "POL":"LAT",
         "POST":"HPF",
         "PoT":"VP",
+        "PO":"VP",
         "PP":"ILM",# PIL-PP in lit., ILMN: intralaminar nuclei
         "PPN":"MB",
         "PR":"MED",
         "PRC":"PAG",
         "PRNr":"Pons",
+        "PVT": "MTN",
+        "PV": "MTN",
         "RE":"MTN",
         "RPF":"MB",
         "RR":"MB",
         "RSP": "RSP",
         "SAG":"MB",
         "SGN":"LAT",
+        "SPFm":"VP",
+        "SPFp":"VP",
+        "SPF":"VP",
         "SI":"PAL",
         "SMT":"MED",
         #"STR": "STR",
         "SUM":"HY",
         "TEa": "TEa",
         "TRS":"PAL",
-        "VPL": "VPL",
-        "VPM": "VPM",
+        "VPL": "VP",
+        "VPM": "VP",
+        "VAL":"VM",
         "VM":"VM",
         "Xi":"MTN"
     }
@@ -162,7 +174,6 @@ def generalize_region(region):
                 return region_map[key]
         except AttributeError as err:
             print(err, region)
-
     if region.startswith("LA"):
         return "LAT" if region.startswith("LAT") else "LA"
 
@@ -224,10 +235,6 @@ def create_area_custom_column(df):
             region = simplify_area(row['ccf_acronym'], row.get('ccf_parent_acronym', None))
 
         # Apply PPC unification (row context available here)
-        try:
-            region = handle_ppc(region, row)
-        except KeyError as err: # If no row['target_region']
-            region = region
         return region
 
     df['area_acronym_custom'] = df.apply(simplify_per_nomenclature, axis=1)
@@ -238,7 +245,7 @@ def extract_layer_info_original(ccf_acronym):
     match = re.search(r'(\d+[a-zA-Z]*)', ccf_acronym)
     if match:
         layer = match.group(0)
-        return "2/3" if layer == "2" else layer
+        return "2/3" if layer in ["2", "3"] else layer
     return None
 
 def extract_layer_info(ccf_acronym):
@@ -270,7 +277,7 @@ def create_layer_number_column(df):
         col='ccf_atlas_acronym'
     else:
         col='ccf_acronym'
-    df['layer_number'] = df[col].apply(extract_layer_info) #Check which is nans
+    df['layer_number'] = df[col].apply(extract_layer_info_original) #Check which is nans
     return df
 
 
@@ -279,11 +286,16 @@ def create_ccf_acronym_no_layer_column(df):
     if 'ccf_atlas_acronym' in df.columns and 'ccf_atlas_parent_acronym' in df.columns:
         col='ccf_atlas_acronym'
         col_parent='ccf_atlas_parent_acronym'
-    else:
+        df['ccf_atlas_acronym_no_layer'] = df.apply(
+            lambda row: handle_ssp_bfd(row[col_parent]) if contains_layer(row[col]) else row[col], axis=1)
+
+    elif 'ccf_acronym' in df.columns and 'ccf_parent_acronym' in df.columns:
         col='ccf_acronym'
         col_parent='ccf_parent_acronym'
-    df['ccf_acronym_no_layer'] = df.apply(
-        lambda row: handle_ssp_bfd(row[col_parent]) if contains_layer(row[col]) else row[col], axis=1)
+        df['ccf_acronym_no_layer'] = df.apply(
+            lambda row: handle_ssp_bfd(row[col_parent]) if contains_layer(row[col]) else row[col], axis=1)
+    else:
+        print('Warning: cannot estimate ccf column without layer.')
     return df
 
 def get_target_region_order():
@@ -316,12 +328,12 @@ def get_custom_area_groups():
     """
 
     area_groups = {
-        'Motor and frontal areas': ['MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2', 'mPFC', 'FRP', 'ACA', 'PL', 'ORB', 'AI'],
-        'Somatosensory areas': ['SSp-bfd', 'SSs', 'SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'VISC', 'GU'],
+        'Motor and frontal areas': ['MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2', 'mPFC', 'FRP', 'ACA', 'PL', 'ORB'],
+        'Somatosensory areas': ['SSp-bfd', 'SSs', 'SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'VISC', 'GU', 'AI'],
         'Auditory areas': ['AUD', 'TEa'],
         'Retrosplenial areas': ['RSP'],
         'Visual areas': ['PPC', 'VIS', 'VISa', 'VISp', 'VISam', 'VISl', 'VISpm', 'VISrl', 'VISal'],
-        'Cortical subplate': ['CLA', 'EP'],
+        #'Cortical subplate': ['CLA', 'EP'],
         'Hippocampus': ['CA1', 'CA2', 'CA3', 'DG', 'HPF'],
         'Striatum and pallidum': ['CP', 'DMS', 'DLS', 'TS', 'STR', 'VS', 'ACB', 'FS', 'LS', 'SF', 'GPe', 'GPi', 'PAL', 'MS'],
         'Thalamus': ['TH', 'VPL', 'VPM', 'VP', 'LD', 'RT', 'PO', 'LGN', 'LP', 'ATN', 'LAT', 'MGN', 'MED', 'MTN', 'ILM', 'HA', 'CL'],
@@ -495,6 +507,7 @@ def create_bregma_centric_coords_from_ccf(df):
     """
     # Convert columns to numeric
     df[['ccf_ap', 'ccf_ml', 'ccf_dv']] = df[['ccf_ap', 'ccf_ml', 'ccf_dv']].astype(float)
+    #
 
     # TODO: update fcn after new NWBs
     new_nwb_mice = ['AB077', 'AB080', 'AB082', 'AB085', 'AB086', 'AB087', 'AB092', 'AB093', 'AB094', 'AB095',
@@ -505,7 +518,7 @@ def create_bregma_centric_coords_from_ccf(df):
                     'AB150', 'AB151', 'AB152', 'AB153', 'AB154', 'AB155', 'AB156', 'AB157', 'AB158', 'AB159',
                     'AB161', 'AB162', 'AB163', 'AB164'
                     ]
-    mh_mice = [f'MH{str(i).zfill(3)}' for i in range(40)]
+    mh_mice = [f'MH{str(i).zfill(3)}' for i in range(80)]
     new_nwb_mice.extend(mh_mice)
 
 
@@ -645,7 +658,7 @@ def create_area_groupings(df, verbose=False):
     if verbose:
         print('Creating area groupings...')
     medial_pfc = {"PL", "ILA", "IL", "ACA", "ACAd", "ACAv"} #ORBm for mPFC?
-    ppc = {"VIS", "VISa", "VISam", "VISl", "VISpm", "VISrl", "VISal", "SSp-tr", "SSp-un", "SSp-bfd"}
+    ppc = {"VIS", "VISa", "VISam", "VISl", "VISpm", "VISrl", "VISal", "SSp-tr", "SSp-un"}
 
     def classify(acronym):
         if acronym in medial_pfc:
@@ -658,6 +671,51 @@ def create_area_groupings(df, verbose=False):
     df['area_acronym_custom'] = df.apply(lambda row: classify(row['area_acronym_custom']) if classify(row['area_acronym_custom']) else row['area_acronym_custom'], axis=1)
     return df
 
+def create_thalamic_groupings(df, verbose=False):
+    """
+    Create thalamic area groupings based on functional organization.
+    Groups thalamic nuclei into 8 functional clusters; non-thalamic areas are unchanged.
+    :param df: DataFrame with 'area_acronym_custom' column
+    :param verbose:
+    :return: DataFrame with thalamic nuclei grouped in 'area_acronym_custom'
+    """
+    if verbose:
+        print('Creating thalamic groupings...')
+
+    anterior          = {"AD", "AV", "AM", "IAD", "IAM", "LD"}
+    medial            = {"MD", "MDc", "MDl", "MDm", "IMD", "SMT", "PR"}
+    midline_intralaminar = {"PVT", "PT", "Re", "Rh", "Xi", "CM", "CL", "PC", "Pf", "PIL", "ILM", "IntG"}
+    ventral           = {"VPM", "VPL", "VPMpc", "VPLpc", "VAL", "VM", "PoT"}
+    posterior_lp      = {"PO", "LP", "SPA", "PP", "SGN", "Eth", "SubG"}
+    visual_lgn        = {"LGd", "LGd-co", "LGd-ip", "LGd-sh", "LGv", "IGL", "OPT"}
+    auditory_mgn      = {"MGv", "MGd", "MGm", "SG", "LT", "MG"}
+    reticular         = {"RT"}
+
+    def classify(acronym):
+        if acronym in anterior:
+            return "ATN" #limbic, memory, context
+        elif acronym in medial:
+            return "MT" #limbic, prefrontal relay, cognitive control
+        elif acronym in midline_intralaminar:
+            return "ILN" # arousal, salience
+        elif acronym in ventral:
+            return "VT" # more somatosensory and motor and cerebellar
+        elif acronym in posterior_lp:
+            return "PT" # higher-order multimodal, cortical feedback
+        elif acronym in visual_lgn:
+            return "LGN" # visual
+        elif acronym in auditory_mgn:
+            return "MGN" # auditory
+        elif acronym in reticular:
+            return "RT" #inhibitory gating
+
+    df = df.copy()
+    df['area_acronym_custom'] = df.apply(
+        lambda row: classify(row['area_acronym_custom']) or row['area_acronym_custom'],
+        axis=1
+    )
+    return df
+
 def process_allen_labels(df, subdivide_areas=False):
     """
     Process the DataFrame to create custom area acronyms, layer numbers, and bregma-centric coordinates.
@@ -667,7 +725,7 @@ def process_allen_labels(df, subdivide_areas=False):
     """
 
     # Check if processing can be performed
-    required_cols = ['target_region', 'ccf_acronym', 'ccf_parent_acronym', 'ccf_atlas_acronym', 'ccf_atlas_parent_acronym', 'ccf_ap', 'ccf_ml', 'ccf_dv', 'mouse_id']
+    required_cols = ['target_region', 'ccf_atlas_acronym', 'ccf_atlas_parent_acronym', 'ccf_ap', 'ccf_ml', 'ccf_dv', 'mouse_id']
     if not all(col in df.columns for col in required_cols):
         missing_cols = [col for col in required_cols if col not in df.columns]
         print(f'allen_utils.process_allen_labels: Warning - missing required columns for processing. Available columns: {df.columns}, Missing: {missing_cols}')
@@ -677,11 +735,18 @@ def process_allen_labels(df, subdivide_areas=False):
     # Remove unwanted areas
     try:
         df = df[~df['ccf_atlas_acronym'].isin(get_excluded_areas())]
-    except KeyError as err: #TODO: fix these mice
+    except KeyError as err:
         mouse_id = df['mouse_id'].unique()[0]
-        print(f'ALLEN_UTILS [Warning]: issue with {mouse_id} CCF label processing: {err}')
+        print(f'Warning: issue with {mouse_id} CCF label processing: {err}')
 
     # Create custom area acronyms simplifying ccf areas acronyms
+    #temp: remove nan from required columns
+    df['ccf_atlas_acronym'] = df['ccf_atlas_acronym'].apply(lambda x: str(x))
+    rows_with_nan = df.loc[
+        df[required_cols].isna().any(axis=1),
+        ["mouse_id", "cluster_id", "ccf_atlas_acronym"]
+    ]
+    print(f"Warning: mouse with nan ccf labels ({len(rows_with_nan)}):", rows_with_nan.mouse_id.unique(), rows_with_nan)
     df = create_area_custom_column(df)
 
     # Create layer number column
@@ -696,9 +761,8 @@ def process_allen_labels(df, subdivide_areas=False):
     # Create areas subdivisions for specific areas using custom boundaries
     if subdivide_areas:
         df = create_areas_subdivisions(df, verbose=False)
-        print(df.area_acronym_custom.unique())
         df = create_area_groupings(df, verbose=False)
-        print(df.area_acronym_custom.unique())
+        df = create_thalamic_groupings(df, verbose=False)
 
     return df
 
@@ -780,7 +844,7 @@ def keep_shared_areas(data_df, nomenclature, n_min_units=10, n_min_mice=3):
     return data_df, shared_areas
 
 
-def load_process_hierarchy_from_harris():
+def load_process_hierarchy_from_harris_old():
     """
     Load the Allen atlas hierarchy from the Harris et al. 2019 paper, which provides a simplified hierarchy of brain regions.
     Cortex and thalamus only.
@@ -792,7 +856,6 @@ def load_process_hierarchy_from_harris():
     path_to_data = pathlib.Path(__file__).parent.parent / 'allen_utils' / 'data'
     path_to_file = path_to_data / filename
 
-    print(path_to_file, os.getcwd())
     if not path_to_file.is_file():
         raise FileNotFoundError(f"Hierarchy file not found at {path_to_file}. Get data from: \n https://github.com/AllenInstitute/MouseBrainHierarchy/tree/master")
 
@@ -802,6 +865,8 @@ def load_process_hierarchy_from_harris():
     hierarchy_df.rename(columns={'CC+TC+CT iterated': 'cc_tc_ct_iterated',
                                  'areas':'ccf_acronym'}, inplace=True)
     hierarchy_df['ccf_atlas_acronym'] = hierarchy_df['ccf_acronym'] # for compatibility with create_area_custom_column
+    hierarchy_df['ccf_atlas_parent_acronym'] = hierarchy_df['ccf_acronym'] # for compatibility with create_area_custom_column
+    hierarchy_df['ccf_acronym_no_layer'] = hierarchy_df['ccf_acronym'] # for compatibility with create_area_custom_column
     print('Areas in raw hierarchy summary:', hierarchy_df.ccf_acronym.nunique())
 
     # Using "CC+TC+CT iterated" column, create a another column which adapted to use the area_acronym_custom
@@ -810,29 +875,41 @@ def load_process_hierarchy_from_harris():
 
     # Remove duplicates areas resulting from merging, keeping the mean hierarchy score for each area_acronym_custom
     print('Merging areas and averaging hierarchy scores for area duplicates...')
-    hierarchy_df = hierarchy_df.groupby('area_acronym_custom').agg({'cc_tc_ct_iterated': 'mean', 'ccf_acronym': lambda x: ','.join(x.unique())}).reset_index()
+    hierarchy_df = hierarchy_df.groupby('ccf_acronym_no_layer').agg({'cc_tc_ct_iterated': 'mean', 'ccf_acronym': lambda x: ','.join(x.unique())}).reset_index()
+    hierarchy_df['ccf_acronym_no_layer'] = hierarchy_df['ccf_acronym']
+    hierarchy_df['ccf_atlas_acronym'] = hierarchy_df['ccf_acronym']
+    hierarchy_df['ccf_atlas_parent_acronym'] = hierarchy_df['ccf_acronym']
 
     return hierarchy_df
 
-def merge_hierarchy_from_harris(df):
+def merge_hierarchy_from_harris_old(df, merge_on='area_acronym_custom'):
     """
     Merge the hierarchy summary scores from Harris et al. onto the DataFrame based on area_acronym_custom.
     :param df: DataFrame with 'area_acronym_custom' column.
     :return: DataFrame with a new 'cc_tc_ct_iterated' column containing hierarchy scores.
     """
+    if merge_on not in df.columns:
+        print(f"Column '{merge_on}' not found in DataFrame.")
+
     hierarchy_df = load_process_hierarchy_from_harris()
-    df = df.merge(hierarchy_df[['area_acronym_custom', 'cc_tc_ct_iterated']], on='area_acronym_custom', how='left')
+    df = df.merge(hierarchy_df[[merge_on, 'cc_tc_ct_iterated']], on=merge_on, how='left')
     return df
 
 
-def load_liu_et_al_avg_ipsi():
+def load_liu_et_al_avg_ipsi_old():
     """
     Load the Liu et al. group averages data and return a mapping from area acronym to avg_ipsi.
     :return: Dictionary mapping area acronym to avg_ipsi value.
     """
-    liu_path = r'M:\analysis\Myriam_Hamon\combined_data\processed_data\Liu_et_al_Group_averages_ranked.xlsx'
+    try:
+        # Get relative path from here to data file
+        filename = 'Liu_et_al_Group_averages_ranked.xlsx'
+        path_to_data = pathlib.Path(__file__).parent.parent / 'allen_utils' / 'data'
+        liu_path = path_to_data / filename
+    except FileNotFoundError as err:
+        print(err)
+
     liu_df = pd.read_excel(liu_path)
-    print(liu_df.keys())
     # First two rows are headers, actual data starts from row index 2
     liu_df = liu_df.iloc[2:].reset_index(drop=True)
     liu_df = liu_df.rename(columns={'Unnamed: 0': 'acronym'})
@@ -841,7 +918,7 @@ def load_liu_et_al_avg_ipsi():
     return liu_df.set_index('acronym')['avg_ipsi'].to_dict()
 
 
-def merge_liu_avg_ipsi(df, col_parent):
+def merge_liu_avg_ipsi_old(df, col_parent):
     """
     Merge Liu et al. avg_ipsi values onto the DataFrame.
     First tries matching on 'area_acronym_custom', then falls back to the parent acronym column.
@@ -853,10 +930,251 @@ def merge_liu_avg_ipsi(df, col_parent):
     liu_avg_ipsi = load_liu_et_al_avg_ipsi()
 
     # First try matching on area_acronym_custom
-    df['avg_ipsi_corr'] = df['area_acronym_custom'].map(liu_avg_ipsi)
+    df['avg_ipsi'] = df['ccf_atlas_parent_acronym'].map(liu_avg_ipsi)
 
     # For rows without a match, fall back to parent acronym
-    missing_mask = df['avg_ipsi_corr'].isna()
-    df.loc[missing_mask, 'avg_ipsi_corr'] = df.loc[missing_mask, col_parent].map(liu_avg_ipsi)
+    missing_mask = df['avg_ipsi'].isna()
+    print(f"Missing rows with Liu data", missing_mask.sum())
+    df.loc[missing_mask, 'avg_ipsi'] = df.loc[missing_mask, col_parent].map(liu_avg_ipsi)
+
+    return df
+
+def merge_liu_avg_ipsi_opt(df, cols_priority=None):
+    """
+    Merge Liu et al. avg_ipsi values onto the DataFrame using multiple possible columns.
+
+    :param df: DataFrame containing atlas acronym columns
+    :param cols_priority: list of column names to try in order
+                          (default: ['ccf_atlas_acronym', 'ccf_atlas_parent_acronym'])
+    :return: DataFrame with new column 'avg_ipsi'
+    """
+
+    liu_avg_ipsi = load_liu_et_al_avg_ipsi()
+
+    if cols_priority is None:
+        cols_priority = ['ccf_atlas_parent_acronym']
+    else:
+        cols_priority = [cols_priority]
+
+    # Initialize column
+    df['avg_ipsi'] = np.nan
+
+    for col in cols_priority:
+
+        missing_mask = df['avg_ipsi'].isna()
+        matched_values = df.loc[missing_mask, col].map(liu_avg_ipsi)
+        df.loc[missing_mask, 'avg_ipsi'] = matched_values
+        #print(f"{col}: matched {(~matched_values.isna()).sum()} rows")
+
+    # Final report
+    total_missing = df['avg_ipsi'].isna().sum()
+    print(f"Total missing rows after merge: {total_missing}")
+
+    return df
+
+
+
+DATA_DIR = pathlib.Path(__file__).parent.parent / 'allen_utils' / 'data'
+MERGE_KEY = 'ccf_atlas_acronym_no_layer'
+
+def _load_excel(filename, missing_file_hint='', **kwargs):
+    """Generic excel loader with a clear error message if the file is missing."""
+    path_to_file = DATA_DIR / filename
+    if not path_to_file.is_file():
+        raise FileNotFoundError(f"Data file not found at {path_to_file}. {missing_file_hint}")
+    return pd.read_excel(path_to_file, **kwargs)
+
+
+def _dedupe_on_key(df, value_cols, source_name):
+    """Collapse duplicate MERGE_KEY rows by averaging value_cols, warning if it happens."""
+    n_dupes = df[MERGE_KEY].duplicated().sum()
+    if n_dupes:
+        print(f"{source_name}: {n_dupes} duplicate '{MERGE_KEY}' rows found, averaging {value_cols}.")
+        df = df.groupby(MERGE_KEY, as_index=False)[value_cols].mean()
+    return df
+
+
+def _merge_and_report(df, source_df, value_col, source_name):
+    """Left-merge source_df onto df on MERGE_KEY, overwrite value_col, report unmatched keys."""
+    if MERGE_KEY not in df.columns:
+        raise KeyError(f"'{MERGE_KEY}' column not found in target DataFrame.")
+
+    df = df.merge(source_df, on=MERGE_KEY, how='left', suffixes=('', '_new'))
+    if f'{value_col}_new' in df.columns:
+        df[value_col] = df[f'{value_col}_new']
+        df = df.drop(columns=[f'{value_col}_new'])
+
+    matched = sorted(df.loc[df[value_col].notna(), MERGE_KEY].dropna().unique().tolist())
+    unmatched = sorted(df.loc[df[value_col].isna(), MERGE_KEY].dropna().unique().tolist())
+    print(f"{source_name}: added column '{value_col}' -- "
+          f"matched {df[value_col].notna().sum()}/{len(df)} rows, "
+          f"{len(matched)} matched {MERGE_KEY} values, "
+          f"{len(unmatched)} unmatched {MERGE_KEY} values.")
+    #if matched:
+        #print(f"  Matched: {matched}")
+    #if unmatched:
+        #print(f"  Unmatched: {unmatched}")
+
+    return df
+
+
+# ---------------------------------------------------------------- Harris et al.
+
+def load_process_hierarchy_from_harris():
+    """
+    Load the Allen atlas hierarchy from Harris et al. 2019 (cortex and thalamus only),
+    collapsed to one row per no-layer area.
+    :return: DataFrame with columns [MERGE_KEY, 'cc_tc_ct_iterated'].
+    """
+    filename = 'hierarchy_summary_CreConf.xlsx'
+    hint = 'Get data from: https://github.com/AllenInstitute/MouseBrainHierarchy/tree/master'
+    hierarchy_df = _load_excel(filename, hint, sheet_name='hierarchy_all_regions')
+    hierarchy_df = hierarchy_df.rename(columns={'CC+TC+CT iterated': 'cc_tc_ct_iterated',
+                                                 'areas': 'ccf_acronym'})
+
+    # create_area_custom_column is assumed to strip layer suffixes (e.g. "VISp2/3" -> "VISp")
+    # and return this in 'area_acronym_custom' -- see caveats below.
+    hierarchy_df = create_area_custom_column(hierarchy_df)
+    hierarchy_df[MERGE_KEY] = hierarchy_df['area_acronym_custom']
+
+    hierarchy_df = _dedupe_on_key(hierarchy_df, ['cc_tc_ct_iterated'], 'Harris hierarchy')
+    return hierarchy_df
+
+
+def merge_hierarchy_from_harris(df):
+    """Merge Harris et al. hierarchy scores onto df, matched on MERGE_KEY."""
+    return _merge_and_report(df, load_process_hierarchy_from_harris(), 'cc_tc_ct_iterated', 'Harris hierarchy')
+
+
+# ---------------------------------------------------------------- Liu et al.
+
+def load_liu_et_al_avg_ipsi():
+    """
+    Load Liu et al. group-average ipsi fluorescence values (log-transformed).
+    :return: DataFrame with columns [MERGE_KEY, 'avg_ipsi'] (avg_ipsi is ln-transformed).
+    """
+    filename = 'Liu_et_al_Group_averages_ranked.xlsx'
+    liu_df = _load_excel(filename)
+    liu_df = liu_df.iloc[2:].reset_index(drop=True)  # first two rows are headers
+    liu_df = liu_df.rename(columns={'Unnamed: 0': MERGE_KEY})
+    liu_df = liu_df[[MERGE_KEY, 'avg_ipsi']].dropna(subset=[MERGE_KEY])
+    liu_df['avg_ipsi'] = pd.to_numeric(liu_df['avg_ipsi'], errors='coerce')
+    #with np.errstate(divide="ignore", invalid="ignore"):
+    #    liu_df['avg_ipsi'] = np.where(liu_df['avg_ipsi'] > 0, np.log10(liu_df['avg_ipsi']), np.nan)
+    return _dedupe_on_key(liu_df, ['avg_ipsi'], 'Liu et al.')
+
+
+def merge_liu_avg_ipsi(df):
+    """Merge Liu et al. avg_ipsi values onto df, matched on MERGE_KEY. Adds 'avg_ipsi'."""
+    liu_df = load_liu_et_al_avg_ipsi().rename(columns={'avg_ipsi': 'avg_ipsi'})
+    return _merge_and_report(df, liu_df, 'avg_ipsi', 'Liu et al.')
+
+
+# ---------------------------------------------------------------- Gao et al.
+
+def load_process_hierarchy_from_gao():
+    """
+    Load the Gao et al. corticocortical hierarchy scores.
+    :return: DataFrame with columns [MERGE_KEY, 'cc_hierarchy_score'].
+    """
+    filename = 'Gao_cc_hierarchy_mmc6.xlsx'
+    hierarchy_df = _load_excel(filename, 'Get from the Gao et al. supplementary materials on Github.')
+    hierarchy_df = hierarchy_df.rename(columns={'Mean': 'cc_hierarchy_score', 'Region': MERGE_KEY})
+    hierarchy_df = hierarchy_df[[MERGE_KEY, 'cc_hierarchy_score']]
+    return _dedupe_on_key(hierarchy_df, ['cc_hierarchy_score'], 'Gao et al.')
+
+
+def merge_hierarchy_from_gao(df):
+    """Merge Gao et al. hierarchy scores onto df, matched on MERGE_KEY."""
+    return _merge_and_report(df, load_process_hierarchy_from_gao(), 'cc_hierarchy_score', 'Gao et al.')
+
+
+GAO_COLUMN_COORD_MAP = {'X': 'ap', 'Y': 'dv', 'Z': 'ml'}
+def load_process_hierarchy_columns_from_gao():
+    """
+    Load the Gao et al. corticocortical hierarchy scores at the single
+    cortical column level, together with each column's 3D CCF coordinates
+    (so that individual neurons can later be assigned to their nearest
+    column).
+
+    :return: DataFrame with columns [MERGE_KEY, 'ColumnID',
+        'cc_hierarchy_score_columns', 'col_ap', 'col_dv', 'col_ml'].
+        NOT deduped on MERGE_KEY (area), since several columns can share the
+        same area label and we need every individual column's coordinates.
+    """
+    filename = 'Gao_cortical_columns_ROIs.xlsx'
+    hierarchy_df = _load_excel(filename, 'Get from the Gao et al. supplementary materials on Github.')
+    hierarchy_df = hierarchy_df.rename(columns={
+        'HierarchyScore': 'cc_hierarchy_score_columns',
+        'Region': MERGE_KEY,
+        'X': f'col_{GAO_COLUMN_COORD_MAP["X"]}',
+        'Y': f'col_{GAO_COLUMN_COORD_MAP["Y"]}',
+        'Z': f'col_{GAO_COLUMN_COORD_MAP["Z"]}',
+        'U': 'col_u',
+        'V': 'col_v',
+    })
+    hierarchy_df = hierarchy_df[[MERGE_KEY, 'ColumnID', 'cc_hierarchy_score_columns',
+                                  'col_ap', 'col_dv', 'col_ml', 'col_u', 'col_v']]
+    # NB: Gao et al. X/Y/Z are 10 um-resolution CCFv3 voxel indices; convert to um
+    # to match ccf_atlas_ml/dv/ap.
+    hierarchy_df[['col_ap', 'col_dv', 'col_ml']] *= 10
+
+    # Gao's columns are defined on the opposite hemisphere from our neurons;
+    # mirror col_ml about the midline so both sit in the same hemisphere.
+    CCF_ML_MIDLINE = 5700  # half of full CCF ML extent in um -- confirm against your atlas
+    hierarchy_df['col_ml'] = 2 * CCF_ML_MIDLINE - hierarchy_df['col_ml']
+
+
+    return hierarchy_df.reset_index(drop=True)
+
+
+def merge_hierarchy_columns_from_gao(df):
+    """
+    Assign each cortical neuron in df to its nearest Gao et al. column
+    (nearest neighbor in ml/dv/ap CCF space) and attach that column's
+    hierarchy score.
+
+    A neuron is only eligible for assignment if its area label
+    (df[MERGE_KEY]) is one of the areas present in the Gao et al. column
+    table (i.e. it's a cortical area covered by Gao et al.). Neurons in any
+    other area are left with NaN.
+
+    :param df: DataFrame with columns [MERGE_KEY, 'ccf_Atlas_ml',
+        'ccf_Atlas_dv', 'ccf_Atlas_ap'].
+    :return: df with two new columns added: 'cc_hierarchy_score_columns'
+        (nearest column's hierarchy score) and 'nearest_gao_column_id'
+        (Gao et al. ColumnID of the nearest column), both NaN for
+        non-cortical / non-covered neurons.
+    """
+    hierarchy_df = load_process_hierarchy_columns_from_gao()
+    cortical_areas = set(hierarchy_df[MERGE_KEY].unique())
+
+    df = df.copy()
+    df['cc_hierarchy_score_columns'] = np.nan
+    df['nearest_gao_column_id'] = np.nan
+
+    is_eligible = df[MERGE_KEY].isin(cortical_areas)
+    #print('Matched:', list(df[MERGE_KEY][is_eligible].unique()))
+    n_eligible = int(is_eligible.sum())
+    n_total = len(df)
+
+    if n_eligible == 0:
+        print(f"[Gao et al.] No neurons matched a cortical area covered by "
+              f"the column table ({n_total} neurons total); skipping nearest-column assignment.")
+        return df
+
+    column_coords = hierarchy_df[['col_ml', 'col_dv', 'col_ap']].to_numpy()
+    tree = cKDTree(column_coords) #create tree
+
+    neuron_coords = df.loc[is_eligible, ['ccf_atlas_ml', 'ccf_atlas_dv', 'ccf_atlas_ap']].to_numpy()
+    distances, nearest_idx = tree.query(neuron_coords, k=1) # look for nearest neighbor
+
+    df.loc[is_eligible, 'cc_hierarchy_score_columns'] = hierarchy_df['cc_hierarchy_score_columns'].to_numpy()[nearest_idx]
+    df.loc[is_eligible, 'nearest_gao_column_id'] = hierarchy_df['ColumnID'].to_numpy()[nearest_idx]
+
+    print(f"[Gao et al.] Assigned nearest cortical column to {n_eligible}/{n_total} neurons "
+          f"({n_total - n_eligible} left as NaN: area not covered by Gao et al. columns). "
+          f"Mean nearest-neighbor distance = {distances.mean():.1f}, "
+          f"max = {distances.max():.1f} (same units as ccf_atlas_ml/dv/ap).")
 
     return df
