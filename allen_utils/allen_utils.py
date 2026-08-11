@@ -824,101 +824,6 @@ def keep_shared_areas(data_df, nomenclature, n_min_units=10, n_min_mice=3):
     return data_df, shared_areas
 
 
-def load_process_hierarchy_from_harris_old():
-    """
-    Load the Allen atlas hierarchy from the Harris et al. 2019 paper, which provides a simplified hierarchy of brain regions.
-    Cortex and thalamus only.
-    :return: DataFrame with hierarchy summary scores and area acronyms.
-    """
-
-    # Get relative path from here to data file
-    filename = 'hierarchy_summary_CreConf.xlsx'
-    path_to_data = pathlib.Path(__file__).parent.parent / 'allen_utils' / 'data'
-    path_to_file = path_to_data / filename
-
-    if not path_to_file.is_file():
-        raise FileNotFoundError(f"Hierarchy file not found at {path_to_file}. Get data from: \n https://github.com/AllenInstitute/MouseBrainHierarchy/tree/master")
-
-    hierarchy_df = pd.read_excel(path_to_file, sheet_name='hierarchy_all_regions')
-
-    # Rename columns
-    hierarchy_df.rename(columns={'CC+TC+CT iterated': 'cc_tc_ct_iterated',
-                                 'areas':'ccf_acronym'}, inplace=True)
-    hierarchy_df['ccf_atlas_acronym'] = hierarchy_df['ccf_acronym'] # for compatibility with create_area_custom_column
-    hierarchy_df['ccf_atlas_parent_acronym'] = hierarchy_df['ccf_acronym'] # for compatibility with create_area_custom_column
-    hierarchy_df['ccf_acronym_no_layer'] = hierarchy_df['ccf_acronym'] # for compatibility with create_area_custom_column
-    print('Areas in raw hierarchy summary:', hierarchy_df.ccf_acronym.nunique())
-
-    # Using "CC+TC+CT iterated" column, create a another column which adapted to use the area_acronym_custom
-    hierarchy_df = create_area_custom_column(hierarchy_df)
-    print('Areas in processed hierarchy summary:', hierarchy_df.area_acronym_custom.nunique())
-
-    # Remove duplicates areas resulting from merging, keeping the mean hierarchy score for each area_acronym_custom
-    print('Merging areas and averaging hierarchy scores for area duplicates...')
-    hierarchy_df = hierarchy_df.groupby('ccf_acronym_no_layer').agg({'cc_tc_ct_iterated': 'mean', 'ccf_acronym': lambda x: ','.join(x.unique())}).reset_index()
-    hierarchy_df['ccf_acronym_no_layer'] = hierarchy_df['ccf_acronym']
-    hierarchy_df['ccf_atlas_acronym'] = hierarchy_df['ccf_acronym']
-    hierarchy_df['ccf_atlas_parent_acronym'] = hierarchy_df['ccf_acronym']
-
-    return hierarchy_df
-
-def merge_hierarchy_from_harris_old(df, merge_on='area_acronym_custom'):
-    """
-    Merge the hierarchy summary scores from Harris et al. onto the DataFrame based on area_acronym_custom.
-    :param df: DataFrame with 'area_acronym_custom' column.
-    :return: DataFrame with a new 'cc_tc_ct_iterated' column containing hierarchy scores.
-    """
-    if merge_on not in df.columns:
-        print(f"Column '{merge_on}' not found in DataFrame.")
-
-    hierarchy_df = load_process_hierarchy_from_harris()
-    df = df.merge(hierarchy_df[[merge_on, 'cc_tc_ct_iterated']], on=merge_on, how='left')
-    return df
-
-
-def load_liu_et_al_avg_ipsi_old():
-    """
-    Load the Liu et al. group averages data and return a mapping from area acronym to avg_ipsi.
-    :return: Dictionary mapping area acronym to avg_ipsi value.
-    """
-    try:
-        # Get relative path from here to data file
-        filename = 'Liu_et_al_Group_averages_ranked.xlsx'
-        path_to_data = pathlib.Path(__file__).parent.parent / 'allen_utils' / 'data'
-        liu_path = path_to_data / filename
-    except FileNotFoundError as err:
-        print(err)
-
-    liu_df = pd.read_excel(liu_path)
-    # First two rows are headers, actual data starts from row index 2
-    liu_df = liu_df.iloc[2:].reset_index(drop=True)
-    liu_df = liu_df.rename(columns={'Unnamed: 0': 'acronym'})
-    liu_df = liu_df[['acronym', 'avg_ipsi']].dropna(subset=['acronym'])
-    liu_df['avg_ipsi'] = pd.to_numeric(liu_df['avg_ipsi'], errors='coerce')
-    return liu_df.set_index('acronym')['avg_ipsi'].to_dict()
-
-
-def merge_liu_avg_ipsi_old(df, col_parent):
-    """
-    Merge Liu et al. avg_ipsi values onto the DataFrame.
-    First tries matching on 'area_acronym_custom', then falls back to the parent acronym column.
-
-    :param df: DataFrame with 'area_acronym_custom' column.
-    :param col_parent: Name of the parent acronym column to use as fallback.
-    :return: DataFrame with a new 'avg_ipsi' column.
-    """
-    liu_avg_ipsi = load_liu_et_al_avg_ipsi()
-
-    # First try matching on area_acronym_custom
-    df['avg_ipsi'] = df['ccf_atlas_parent_acronym'].map(liu_avg_ipsi)
-
-    # For rows without a match, fall back to parent acronym
-    missing_mask = df['avg_ipsi'].isna()
-    print(f"Missing rows with Liu data", missing_mask.sum())
-    df.loc[missing_mask, 'avg_ipsi'] = df.loc[missing_mask, col_parent].map(liu_avg_ipsi)
-
-    return df
-
 def merge_liu_avg_ipsi_opt(df, cols_priority=None):
     """
     Merge Liu et al. avg_ipsi values onto the DataFrame using multiple possible columns.
@@ -951,7 +856,6 @@ def merge_liu_avg_ipsi_opt(df, cols_priority=None):
     print(f"Total missing rows after merge: {total_missing}")
 
     return df
-
 
 
 DATA_DIR = pathlib.Path(__file__).parent.parent / 'allen_utils' / 'data'
@@ -1013,7 +917,7 @@ def load_process_hierarchy_from_harris():
                                                  'areas': 'ccf_acronym'})
 
     # create_area_custom_column is assumed to strip layer suffixes (e.g. "VISp2/3" -> "VISp")
-    # and return this in 'area_acronym_custom' -- see caveats below.
+    # and return this in 'area_acronym_custom'
     hierarchy_df = create_area_custom_column(hierarchy_df)
     hierarchy_df[MERGE_KEY] = hierarchy_df['area_acronym_custom']
 
@@ -1069,7 +973,6 @@ def merge_hierarchy_from_gao(df):
     return _merge_and_report(df, load_process_hierarchy_from_gao(), 'cc_hierarchy_score', 'Gao et al.')
 
 
-GAO_COLUMN_COORD_MAP = {'X': 'ap', 'Y': 'dv', 'Z': 'ml'}
 def load_process_hierarchy_columns_from_gao():
     """
     Load the Gao et al. corticocortical hierarchy scores at the single
@@ -1082,6 +985,8 @@ def load_process_hierarchy_columns_from_gao():
         NOT deduped on MERGE_KEY (area), since several columns can share the
         same area label and we need every individual column's coordinates.
     """
+    GAO_COLUMN_COORD_MAP = {'X': 'ap', 'Y': 'dv', 'Z': 'ml'}
+
     filename = 'Gao_cortical_columns_ROIs.xlsx'
     hierarchy_df = _load_excel(filename, 'Get from the Gao et al. supplementary materials on Github.')
     hierarchy_df = hierarchy_df.rename(columns={
@@ -1104,9 +1009,7 @@ def load_process_hierarchy_columns_from_gao():
     CCF_ML_MIDLINE = 5700  # half of full CCF ML extent in um -- confirm against your atlas
     hierarchy_df['col_ml'] = 2 * CCF_ML_MIDLINE - hierarchy_df['col_ml']
 
-
     return hierarchy_df.reset_index(drop=True)
-
 
 def merge_hierarchy_columns_from_gao(df):
     """

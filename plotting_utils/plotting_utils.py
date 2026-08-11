@@ -38,12 +38,12 @@ CP_SUB_AREA_CMAP = {
     'TS':'#d769f0',
     'CP':'k'
 }
-MOS_SUB_AREA_CMAP = {
+MOS_SUB_AREA_CMAP = { # by location subdivision
     'MOs-p':'#66e85f',
     'MOs-m':'#3e9c3a',
     'MOs-a':'#295e26',
 }
-MO_SUB_AREA_CMAP = {
+MO_SUB_AREA_CMAP = { # by target
     'MO-wM1':'#a8e63e',
     'MO-wM2':'#66e85f',
     'MO-tjM1':'#3e9c3a',
@@ -62,96 +62,6 @@ def get_passive_hot_to_cold_colors():
                '#313131',
                '#AA0531', '#FC9CB5']
     return hotcold
-
-def subset_data_for_area(peth_table, area, params): #TODO: unused, delete or refactor
-    """
-    Subset the PETH table for a specific area based on the nomenclature.
-
-    :param peth_table: PETH table with all mice data
-    :param area: Specific brain area
-    :param params: Plotting parameters
-    :return: Subset of PETH table for the specified area or None if no data
-    """
-    area_nomenclature = params.get('area_nomenclature', 'ccf_parent_acronym')
-    if area_nomenclature == 'area_acronym':
-        peth_area = peth_table[peth_table['area_acronym'] == area]
-        if peth_area.empty:
-            return None
-    elif area_nomenclature == 'target_region':
-        peth_area = peth_table[peth_table['target_region'] == area]
-        # Further filter cortical areas
-        ctx_areas = allen.get_cortical_areas()
-        peth_area = peth_area[peth_area['ccf_parent_acronym'].isin(ctx_areas)]
-        # Apply specific selections
-        peth_area = allen.apply_target_region_filters(peth_area, area)
-    elif area_nomenclature in ['ccf_parent_acronym', 'ccf_acronym']:
-        peth_area = peth_table[peth_table['area_acronym'] == area]
-        if peth_area.empty:
-            return None
-    else:
-        print(f'Unknown area nomenclature: {area_nomenclature}')
-        return None
-
-    return peth_area
-
-def process_area_acronyms(peth_table): #TODO: use this function to combine future areas e.g. ACAv,ACAd -> ACA, etc.
-    """
-    Process and re-assign area acronyms.
-    In particular, groups barrel columns together.
-    :param peth_table: PETH table with all mice data
-    :param params: Plotting parameters
-    :return: Updated PETH table with processed area acronyms
-    """
-    # Assign to SSp-bfd if ccf parent acronym contains SSp-bfd
-    peth_table['ccf_parent_acronym'] = peth_table['ccf_parent_acronym'].astype(str)
-    peth_table['ccf_parent_acronym'] = peth_table['ccf_parent_acronym'].apply(
-        lambda x: 'SSp-bfd' if 'SSp-bfd' in x else x
-    )
-
-    # Decide which area acronym to use
-    # Use ccf_parent_acronym if layer or part is in the name
-    peth_table['area_acronym'] = peth_table.apply(
-        lambda row: row['ccf_parent_acronym']
-        if ('layer' in row['ccf_name'].lower() or 'part' in row['ccf_name'].lower())
-        else row['ccf_acronym'],
-        axis=1
-    )
-
-    # For cortical areas, use the ccf_parent_acronym
-    ctx_areas = allen.get_cortical_areas()
-    peth_table['area_acronym'] = [row['ccf_parent_acronym'] if row['ccf_parent_acronym'] in ctx_areas
-                               else row['ccf_acronym'] for idx, row in peth_table.iterrows()]
-
-
-    # Are there any that do not have names?
-    print('List of areas without names:')
-    print(peth_table[peth_table['ccf_name'].isnull()]['ccf_acronym'].unique())
-
-    return peth_table
-
-def get_filtered_area_list(peth_table, params):
-    """
-    Filter the list of areas present in the PETH table based on default exclusions.
-    :param peth_table: PETH table with all mice data
-    :return: List of filtered areas to plot
-    """
-
-    if params['area_nomenclature'] == 'area_acronym':
-        # Get unique areas present in dataset
-        areas_present = peth_table['area_acronym'].unique()
-
-        # Exclude areas that are not brain regions
-        excluded_areas = [
-            'root', 'fiber tracts', 'grey', 'nan', 'fxs', 'lfbst', 'cc', 'mfbc', 'cst', 'fa',
-            'VS','ar','ccb','int','or','ccs','cing','ec','em','fi','scwm','alv','chpl','opt',
-            'VL',
-        ]
-        areas_present = [a for a in areas_present if a.lower() not in excluded_areas]
-
-    elif params['area_nomenclature'] == 'target_region':
-        areas_present = peth_table['target_region'].unique()
-
-    return areas_present
 
 
 def format_probe_trajectory_dict(nwb_location_dict):

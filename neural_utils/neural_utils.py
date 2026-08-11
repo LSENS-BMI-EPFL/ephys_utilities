@@ -1221,3 +1221,44 @@ def merge_unit_quantifications(unit_table, *dfs, verbose=True):
         )
 
     return base
+
+
+DEFAULT_BOMBCELL_THRESHOLDS = { #min/max thresholds for good unit classification, based on Bombcell et al. 2023
+    "nSpikes":                           (300,   None),
+    "percentageSpikesMissing_gaussian":  (None,  20),
+    "percentageSpikesMissing_symmetric": (None,  20),
+    "fractionRPVs_estimatedTauR":        (None,  0.1),
+    #"maxDriftEstimate":                  (100,   1000),
+    #"cumDriftEstimate":                  (None,  0),
+    "presenceRatio":                     (0.7,    None),
+    #"rawAmplitude":                      (20,    None), # too dependent on recording
+    #"signalToNoiseRatio":                (20,    None),
+    "isolationDistance" :                (None,    None),
+    "Lratio":                            (None,  None),
+}
+
+def classify_units_bombcell(unit_table: pd.DataFrame,
+                             thresholds: dict = None,
+                             label_col: str = "bc_label") -> pd.DataFrame:
+    """
+    Fast bombcell-style good/mua classification.
+    Works directly on numpy arrays, single pass, no per-row overhead.
+    """
+    thresholds = thresholds or DEFAULT_BOMBCELL_THRESHOLDS
+    n = len(unit_table)
+    pass_mask = np.ones(n, dtype=bool)
+
+    for metric, (lo, hi) in thresholds.items():
+        if metric not in unit_table.columns:
+            continue
+        vals = unit_table[metric].to_numpy(dtype=float, copy=False)
+        ok = ~np.isnan(vals)
+        if lo is not None:
+            ok &= vals >= lo
+        if hi is not None:
+            ok &= vals <= hi
+        pass_mask &= ok
+
+    out = unit_table.copy()
+    out[label_col] = np.where(pass_mask, "good", "mua")
+    return out
