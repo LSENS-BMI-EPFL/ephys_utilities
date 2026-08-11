@@ -507,45 +507,25 @@ def create_bregma_centric_coords_from_ccf(df):
     """
     # Convert columns to numeric
     df[['ccf_ap', 'ccf_ml', 'ccf_dv']] = df[['ccf_ap', 'ccf_ml', 'ccf_dv']].astype(float)
-    #
 
-    # TODO: update fcn after new NWBs
-    new_nwb_mice = ['AB077', 'AB080', 'AB082', 'AB085', 'AB086', 'AB087', 'AB092', 'AB093', 'AB094', 'AB095',
-                    'AB102', 'AB104', 'AB107', #AB105
-                    'AB116', 'AB117', 'AB119', 'AB120', 'AB121', 'AB122', 'AB123', 'AB124', 'AB125', 'AB126', 'AB127', 'AB128', 'AB129',
-                    'AB130', 'AB131', 'AB132', 'AB133', 'AB134', #AB135
-                    'AB136', 'AB137', 'AB138', 'AB139', 'AB140', 'AB141', 'AB142', 'AB143', 'AB144', 'AB145', 'AB146', 'AB147', 'AB148', 'AB149', #AB144
-                    'AB150', 'AB151', 'AB152', 'AB153', 'AB154', 'AB155', 'AB156', 'AB157', 'AB158', 'AB159',
-                    'AB161', 'AB162', 'AB163', 'AB164'
-                    ]
-    mh_mice = [f'MH{str(i).zfill(3)}' for i in range(80)]
-    new_nwb_mice.extend(mh_mice)
+    ibl_bregma_coords = dict(ap=5400, ml=5739, dv=332)
 
-
-    # Define conversion functions (all in um)
-    #ml = (self.channels['x'] * 1e6) + 5739
     # Define conversion functions
     def func_to_ml(row):
-        to_ml = lambda x: x - 5739
-        if row['mouse_id'] in new_nwb_mice:
-            return to_ml(row['ccf_ml'])
-        else:
-            return to_ml(row['ccf_dv']) #TODO: note, DV-ML inverted in NWB_Conversion -> update after new NWBs!
+        to_ml = lambda x: x - ibl_bregma_coords['ml']
+        return to_ml(row['ccf_ml'])
+
 
     #ap = (-self.channels['y'] * 1e6) + 5400
     def func_to_ap(row):
-        to_ap = lambda x: -x + 5400 # AP positive is anterior relative to bregma
-        if row['mouse_id'] in new_nwb_mice:
-            return to_ap(row['ccf_ap'])
-        else:
-            return to_ap(row['ccf_ap'])
+        to_ap = lambda x: -x + ibl_bregma_coords['ap'] # AP positive is anterior relative to bregma
+        return to_ap(row['ccf_ap'])
+
     #dv = (abs(self.channels['z'] * 1e6)) + 332
     def func_to_dv(row):
-        to_dv = lambda x: x - 332
-        if row['mouse_id'] in new_nwb_mice:
-            return to_dv(row['ccf_dv'])
-        else:
-            return to_dv(row['ccf_ml']) #TODO: note, DV-ML inverted in NWB_Conversion -> update after new NWBs!
+        to_dv = lambda x: x - ibl_bregma_coords['dv']
+        return to_dv(row['ccf_dv'])
+
 
     # Apply conversions
     df['ap'] = df.apply(func_to_ap, axis=1)
