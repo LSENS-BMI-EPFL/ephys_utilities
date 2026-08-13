@@ -71,6 +71,7 @@ def process_single_nwb(nwb, day_to_analyze = 0):
         trial_table['reward_group'] = reward_group
         trial_table['context'] = trial_table['context'].astype(str)
         trial_table['day'] = day
+        trial_table['behaviour'] = beh_type
 
         if trial_table['context'].str.contains('nan').all():
             trial_table['context'] = 'active'
@@ -78,12 +79,13 @@ def process_single_nwb(nwb, day_to_analyze = 0):
             trial_table['context'] = trial_table['context'].fillna('active')
             trial_table['context'] = trial_table['context'].replace('nan','active')
 
-
         unit_table['mouse_id'] = mouse_id
         unit_table['session_id'] = session_id
         unit_table['reward_group'] = reward_group
         unit_table['day'] = day
-        print('Warning: number of root neurons :', mouse_id, len(unit_table[unit_table.ccf_acronym=='root']))
+        unit_table['behaviour'] = beh_type
+
+        #print('Warning: number of root neurons :', mouse_id, len(unit_table[unit_table.ccf_acronym=='root']))
 
         unit_table = convert_electrode_group_object_to_columns(unit_table)
 
