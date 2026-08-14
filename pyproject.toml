@@ -23,7 +23,6 @@ dependencies = [
     "scipy",
     "iblatlas",
     "brainrender",
-    "colorsys"
     ]
 
 [tool.setuptools.packages.find]
