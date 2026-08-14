@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ephys_utilities"
+version = "0.1.0"
+description = "Utilities to process extracellulary ephys data"
+requires-python = ">=3.9"
+dependencies = [
+    # list actual imports used across the repo, e.g.:
+    "numpy",
+    "pandas",
+    "pynwb",
+    "tqdm",
+    "multiprocessing",
+    "matplotlib",
+    "seaborn",
+    "plotly",
+    "tables",
+    "openpyxl",
+    "cmasher",
+    "spikeinterface",
+    "scipy",
+    "iblatlas",
+    "brainrender",
+    "colorsys"
+    ]
+
+[tool.setuptools.packages.find]
+include = ["allen_utils*", "helpers*", "neural_utils*", "plotting_utils*"]
