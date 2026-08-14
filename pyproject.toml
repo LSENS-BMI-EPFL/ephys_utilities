@@ -13,7 +13,6 @@ dependencies = [
     "pandas",
     "pynwb",
     "tqdm",
-    "multiprocessing",
     "matplotlib",
     "seaborn",
     "plotly",
