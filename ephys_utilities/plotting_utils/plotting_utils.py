@@ -15,7 +15,7 @@ import cmasher as cmr
 import random
 import copy
 
-import allen_utils as allen
+from ephys_utilities import allen_utils as allen
 
 TARGET_AREA_CUSTOM_CMAP = {
     'wS1': '#379443',

@@ -24,8 +24,7 @@ sys.path.insert(0, r"M:\analysis\Axel_Bisi\NWB_reader")
 sys.path.insert(0, "/home/bisi/code/NWB_reader")
 
 import NWB_reader_functions as nwb_reader
-import allen_utils as allen
-
+from ephys_utilities import allen_utils as allen
 
 TRIAL_MAP = {
     0: 'whisker_miss',
