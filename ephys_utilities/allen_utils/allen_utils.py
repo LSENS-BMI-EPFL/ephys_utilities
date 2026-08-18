@@ -128,6 +128,7 @@ def generalize_region(region):
         "MGd":"MGN",
         "MMd":"HY",
         "MMme":"HY",
+        "MT":"MB",
         "NLL":"Pons",
         "NPC":"MB",
         "ORB": "ORB",
@@ -778,7 +779,6 @@ def process_allen_labels(df, split_merge_areas=False):
     existing_areas = df['area_acronym_custom'].unique()
     # get areas not present in
     missing_areas = [a for a in existing_areas if a not in get_custom_area_order()]
-    print(missing_areas)
     isocortex2group = {area: group for group, areas in get_isocortex_mapping().items() for area in areas}
     df['isocortex_group'] = df['area_acronym_custom'].map(isocortex2group).fillna('Other')
 
