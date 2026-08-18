@@ -129,7 +129,7 @@ def combine_ephys_nwb(nwb_list,day_to_analyze=0, max_workers=24):
 
     if not unit_table.empty:
         print('Removing excluded areas from unit table and creating global unit IDs...')
-        unit_table = unit_table[~unit_table['ccf_atlas_acronym'].isin(allen.get_excluded_areas())]
+        #unit_table = unit_table[~unit_table['ccf_atlas_acronym'].isin(allen.get_excluded_areas())]
         unit_table = unit_table.reset_index(drop=True)
         unit_table['unit_id'] = unit_table.index            # global unit identifier
 
@@ -1225,7 +1225,7 @@ def merge_unit_quantifications(unit_table, *dfs, verbose=True):
 
 
 DEFAULT_BOMBCELL_THRESHOLDS = { #min/max thresholds for good unit classification, based on Bombcell et al. 2023
-    "nSpikes":                           (300,   None),
+    #"nSpikes":                           (300,   None),
     "percentageSpikesMissing_gaussian":  (None,  20),
     "percentageSpikesMissing_symmetric": (None,  20),
     "fractionRPVs_estimatedTauR":        (None,  0.1),
@@ -1234,8 +1234,25 @@ DEFAULT_BOMBCELL_THRESHOLDS = { #min/max thresholds for good unit classification
     "presenceRatio":                     (0.7,    None),
     #"rawAmplitude":                      (20,    None), # too dependent on recording
     #"signalToNoiseRatio":                (20,    None),
-    "isolationDistance" :                (None,    None),
-    "Lratio":                            (None,  None),
+    "isolationDistance" :                (20,    None),
+    "Lratio":                            (None,  0.3),
+    "presence_ratio": (0.8, None),
+    "coverage_ratio": (0.9, None),
+
+}
+
+ROUTE_TRESHOLDS = {
+    #"nSpikes": "noise",
+    "percentageSpikesMissing_gaussian": "mua",
+    "percentageSpikesMissing_symmetric": "mua",
+    "fractionRPVs_estimatedTauR": "mua",
+    "presenceRatio": "mua",
+    "isolationDistance": "mua",
+    "Lratio": "mua",
+    "coverageRatio": "mua",
+    "driftIndependence": "mua",
+    "presence_ratio": "mua",
+    "coverage_ratio": "mua",
 }
 
 def classify_units_bombcell(unit_table: pd.DataFrame,
