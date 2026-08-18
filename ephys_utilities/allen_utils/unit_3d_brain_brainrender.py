@@ -709,7 +709,7 @@ def assign_and_process_labels(df: pd.DataFrame, atlas) -> pd.DataFrame:
 
     print("  Running process_allen_labels …")
     try:
-        df_processed = allen.process_allen_labels(df, subdivide_areas=False)
+        df_processed = allen.process_allen_labels(df, split_merge_areas=False)
         # process_allen_labels drops excluded rows; re-merge on index so we keep
         # all track points and just mark dropped ones as Unassigned.
         df['area_acronym_custom'] = 'Unassigned'

@@ -429,6 +429,32 @@ def create_legend_figure(color_dict, rectangles=True, title='Legend'):
 
     return fig
 
+def get_isocortex_mapping():
+    """ For RS/FS distinctions."""
+    isocortex_groups = {
+        'Isocortex': [
+            'MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2',
+            'mPFC', 'FRP', 'ACA', 'PL', 'ORB',
+            'SSp-bfd', 'SSs', 'SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll',
+            'SSp-tr', 'SSp-un', 'VISC', 'GU', 'AI',
+            'AUD', 'TEa',
+            'RSP',
+            'PPC', 'VIS', 'VISa', 'VISp', 'VISam', 'VISl',
+            'VISpm', 'VISrl', 'VISal'
+        ],
+        'Non-isocortex': [
+            'CA1', 'CA2', 'CA3', 'DG', 'HPF',
+            'CP', 'DMS', 'DLS', 'TS', 'STR', 'VS', 'ACB', 'FS', 'LS',
+            'SF', 'GPe', 'GPi', 'PAL', 'MS',
+            'TH', 'VPL', 'VPM', 'VP', 'LD', 'RT', 'PO', 'LGN', 'LP',
+            'ATN', 'LAT', 'MGN', 'MED', 'MTN', 'ILM', 'HA', 'CL',
+            'SCs', 'SCm', 'MB', 'VTA', 'MRN', 'PAG', 'RN', 'SNr', 'APN',
+            'Pons', 'MY',
+            'AON', 'OLF', 'PIR',
+            'BLA', 'BLAa', 'LA', 'CEA', 'HY', 'ZI'
+        ]
+    }
+    return isocortex_groups
 
 def apply_target_region_filters(peth_table, area):
     """
@@ -696,7 +722,7 @@ def create_thalamic_groupings(df, verbose=False):
     )
     return df
 
-def process_allen_labels(df, subdivide_areas=False):
+def process_allen_labels(df, split_merge_areas=False):
     """
     Process the DataFrame to create custom area acronyms, layer numbers, and bregma-centric coordinates.
     :param df: unit_table pd.DataFrame from NWB files
@@ -739,10 +765,23 @@ def process_allen_labels(df, subdivide_areas=False):
     df = create_bregma_centric_coords_from_ccf(df)
 
     # Create areas subdivisions for specific areas using custom boundaries
-    if subdivide_areas:
+    if split_merge_areas:
         df = create_areas_subdivisions(df, verbose=False)
         df = create_area_groupings(df, verbose=False)
         df = create_thalamic_groupings(df, verbose=False)
+
+    # Add higher-level area groups
+    area2group = ({a: g for g, areas in get_custom_area_groups().items() for a in areas})
+    df['area_group'] = df['area_acronym_custom'].map(area2group).fillna('Other')
+
+    # Add isocortex / rest
+    existing_areas = df['area_acronym_custom'].unique()
+    # get areas not present in
+    missing_areas = [a for a in existing_areas if a not in get_custom_area_order()]
+    print(missing_areas)
+    isocortex2group = {area: group for group, areas in get_isocortex_mapping().items() for area in areas}
+    df['isocortex_group'] = df['area_acronym_custom'].map(isocortex2group).fillna('Other')
+
 
     return df
 
