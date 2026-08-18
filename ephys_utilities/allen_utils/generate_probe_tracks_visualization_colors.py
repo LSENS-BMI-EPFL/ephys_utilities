@@ -47,6 +47,8 @@ EXPERIMENTER_CMAP = {
     'MH': '#6915bd'
 }
 
+DEFAULT_AREA_COLOR = '#888888'
+
 
 def find_session_folder(base: Path, m_name: str, date_val) -> Path | None:
     """
@@ -85,6 +87,64 @@ def find_session_folder(base: Path, m_name: str, date_val) -> Path | None:
         log.warning("  Multiple sessions found for %s on %s — using first: %s", m_name, date_val, candidates[0].name)
 
     return candidates[0]
+
+
+def _hex_from_rgb_triplet(rgb):
+    return '#{:02x}{:02x}{:02x}'.format(*[int(c) for c in rgb])
+
+
+def get_allen_color_for_acronym(atlas, acronym, cache, default_color=DEFAULT_AREA_COLOR):
+    """
+    Look up the official Allen RGB color for a structure acronym via the loaded
+    brainrender/BrainGlobe atlas, caching results since many rows share an area.
+    """
+    if acronym in cache:
+        return cache[acronym]
+    try:
+        rgb = atlas.structures[acronym]['rgb_triplet']
+        color = _hex_from_rgb_triplet(rgb)
+    except KeyError:
+        color = default_color
+    cache[acronym] = color
+    return color
+
+
+def get_row_acronyms_from_coords(atlas, probe_track, debug=False):
+    """
+    Look up the CCF acronym for each point in probe_track directly from atlas
+    coordinates, bypassing the per-probe CSV. probe_track rows are assumed to
+    already be in atlas space (AP, DV, ML), in microns.
+    """
+    acronyms = np.empty(len(probe_track), dtype=object)
+    for i, p in enumerate(probe_track):
+        try:
+            acronym = atlas.structure_from_coords(p, microns=True, as_acronym=True)
+            acronyms[i] = acronym if acronym else 'root'
+        except Exception as e:
+            if debug:
+                print(f"    [row {i}] coord={p} → EXCEPTION: {e}")
+            acronyms[i] = 'root'
+    if debug:
+        vals, counts = np.unique(acronyms, return_counts=True)
+        print(f"    Acronym counts: {dict(zip(vals, counts))}")
+    return acronyms
+
+
+def add_probe_colored_by_allen_area(scene, probe_track, row_acronyms, probe_name, color_cache):
+    """
+    Split a probe track into contiguous runs sharing the same CCF acronym and add one
+    Points actor per run, colored with that structure's official Allen RGB color.
+    """
+    colors = [get_allen_color_for_acronym(scene.atlas, a, color_cache) for a in row_acronyms]
+    n = len(row_acronyms)
+    start = 0
+    for end in range(1, n + 1):
+        if end == n or colors[end] != colors[start]:
+            seg = probe_track[start:end]
+            if len(seg) > 0:
+                scene.add(Points(seg, name=f"{probe_name}_{row_acronyms[start]}",
+                                  colors=colors[start], radius=18, alpha=1.0, res=15))
+            start = end
 
 
 def generate_brain_animation(scene, output_folder: Path, fig_stem: str, camera_view: str, params: dict, camera: dict) -> None:
@@ -166,12 +226,16 @@ def generate_brain_visualization(params):
 
     # Output subfolder by color scheme
     subdir = {'reward_group': 'reward_group', 'target_area': 'target_area',
-              'experimenter': 'experimenter', 'none': 'tracks'}.get(color_by, 'tracks')
+              'experimenter': 'experimenter', 'area_acronym_custom': 'allen_color',
+              'none': 'tracks'}.get(color_by, 'tracks')
     output_folder_path = output_folder_path / subdir
     output_folder_path.mkdir(parents=True, exist_ok=True)
 
     scene = Scene(inset=False, title="", screenshots_folder=output_folder_path, title_color='darkgrey',
                   atlas_name='allen_mouse_bluebrain_barrels_10um')
+
+    # Cache of acronym -> hex color, reused across all probes/mice in this call
+    allen_color_cache = {}
 
     if overlay_areas:
         for area in areas_to_show:
@@ -265,10 +329,8 @@ def generate_brain_visualization(params):
                 probe_arrays_total.append(str(probe_path))
                 print(f"  Loading: {probe_path}")
 
-                #if m_name.startswith('AB') and int(m_name[2:]) < 100 and 'mapped' not in probe_name:
-                #    print(f"  Skipping {probe_name} — missing hemisphere correction.")
-                #    continue
-
+                # Region table is only needed for shank filtering now — coloring by
+                # Allen area is derived directly from atlas coordinates below.
                 rows_selected = None
                 if params['filter_shanks']:
                     probe_track_table = pd.read_csv(probe_table_path)
@@ -304,8 +366,13 @@ def generate_brain_visualization(params):
                 elif color_by == 'experimenter':
                     probe_color = EXPERIMENTER_CMAP.get(experimenter, '#262626')
 
-                print(f"  Adding probe {probe_name} (color={probe_color})")
-                scene.add(Points(probe_track, name=probe_name, colors=probe_color, radius=18, alpha=1.0, res=15))
+                if color_by == 'area_acronym_custom':
+                    row_acronyms = get_row_acronyms_from_coords(scene.atlas, probe_track, debug=False)
+                    print(f"  Adding probe {probe_name}, split by Allen atlas color")
+                    add_probe_colored_by_allen_area(scene, probe_track, row_acronyms, probe_name, allen_color_cache)
+                else:
+                    print(f"  Adding probe {probe_name} (color={probe_color})")
+                    scene.add(Points(probe_track, name=probe_name, colors=probe_color, radius=18, alpha=1.0, res=15))
                 mouse_list_sub_in_plot.append(m_name)
 
     scene.render(interactive=False, camera=camera, zoom=zoom)
@@ -345,7 +412,7 @@ params = {
     'probe_info_path': r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\share_internal\Axel_Bisi_Share\dataset_info\joint_probe_insertion_info.xlsx',
     'mouse_info_path': r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\share_internal\Axel_Bisi_Share\dataset_info\joint_mouse_reference_weight.xlsx',
     'output_folder_path': r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\analysis\Axel_Bisi\combined_results\anatomy',
-    'color_by': 'reward_group',  # 'reward_group', 'target_area', 'none'
+    'color_by': 'reward_group',  # 'reward_group', 'target_area', 'experimenter', 'area_acronym_custom', 'none'
     'target_cmap': 'custom_cmap',  # 'auto' or 'custom_cmap'
     'transparent': True,
     'dark_background': False,
@@ -402,8 +469,8 @@ params = {
 }
 
 if __name__ == "__main__":
-    color_by_sweep = ['reward_group', 'target_area', 'none']
-    camera_views   = ['top', 'angled', 'frontal', 'sagittal']
+    color_by_sweep = ['area_acronym_custom', 'reward_group', 'target_area', 'none']
+    camera_views   = ['sagittal', 'top', 'angled', 'frontal']
     file_formats   = ['png', 'svg']
     for color in color_by_sweep:
         params['color_by'] = color

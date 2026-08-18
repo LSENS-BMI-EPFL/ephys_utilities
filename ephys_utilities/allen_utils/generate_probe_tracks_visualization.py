@@ -198,6 +198,7 @@ def generate_brain_visualization(params):
     mouse_info_df = pd.read_excel(params['mouse_info_path'])
     mouse_info_df.rename(columns={'mouse_name': 'mouse_id'}, inplace=True)
     mouse_info_df = mouse_info_df[mouse_info_df['exclude'] == 0]
+    mouse_info_df = mouse_info_df[mouse_info_df.learning_category.isin(params['learning_category'])]
 
     mouse_list     = probe_info_df['mouse_name'].unique()
     mouse_list_sub = [m for m in mouse_list if m in mouse_info_df['mouse_id'].unique()]
@@ -215,7 +216,7 @@ def generate_brain_visualization(params):
 
         if color_by == 'reward_group':
             rg = mouse_probes['reward_group'].values[0]
-            probe_color = 'forestgreen' if rg == 'R+' else 'crimson'
+            probe_color = 'forestgreen' if rg == 'R+' else 'blueviolet'
 
         for date_val, date_probes in mouse_probes.groupby('date'):
 
@@ -322,6 +323,8 @@ def generate_brain_visualization(params):
     parts.append(cam_suffix)
     if transparent:
         parts.append('transparent')
+    if 'good' in params['learning_category'] and 'moderate' in params['learning_category']:
+        parts.append('learners')
     fig_stem = "all_probes_in_atlas_{}".format('_'.join(parts))
     fig_name = f"{fig_stem}.{params['file_format']}"
 
@@ -387,8 +390,9 @@ params = {
     'label_areas': False,
     'scale': 3,
     'file_format': 'png',  # 'png', 'svg', 'pdf', 'eps'
+    'learning_category': ['moderate','good'],
     'day_of_recording': [0],  # list of day_of_recording values, or [0,1,...] for multiple
-    'animate': True,          # set True to also render a rotating video for each sweep iteration
+    'animate': False,          # set True to also render a rotating video for each sweep iteration
     'animation': {
         'fps':      30,        # frames per second
         'duration': 8,         # seconds for a full 360° rotation (longer = slower)
@@ -398,7 +402,7 @@ params = {
 }
 
 if __name__ == "__main__":
-    color_by_sweep = ['target_area', 'experimenter']
+    color_by_sweep = ['reward_group', 'target_area', 'none']
     camera_views   = ['top', 'angled', 'frontal', 'sagittal']
     file_formats   = ['png', 'svg']
     for color in color_by_sweep:
