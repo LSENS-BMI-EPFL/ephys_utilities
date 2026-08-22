@@ -21,8 +21,8 @@ import multiprocessing as mp
 hostname = socket.gethostname()
 if 'haas' in hostname:
     N_WORKERS = 80
-    ROOT_PATH_AXEL = pathlib.Path('/mnt/lsens-analysis/Axel_Bisi/combined_results')
-    ROOT_PATH_MYRIAM = pathlib.Path('/mnt/lsens-analysis/Myriam_Hamon/combined_results')
+    ROOT_PATH_AXEL = pathlib.Path('/mnt/lsens-analysis/Axel_Bisi/combined_results_ks4')
+    ROOT_PATH_MYRIAM = pathlib.Path('/mnt/lsens-analysis/Myriam_Hamon/combined_results_ks4')
 
     sys.path.append("/home/bisi/code/NWB_reader")
     import NWB_reader_functions as nwb_reader
@@ -273,6 +273,45 @@ def load_wf_analysis_data(nwb_files, experimenter): #TODO: make sure merge is po
     return data_table_wide
 
 
+def load_motion_dredge_shift_test_results(nwb_files, experimenter='AB'):
+    """
+    Load the time-binned drift (motion) shift-test results
+    (single_neuron_shift_test_figs.py output) from per-session CSVs.
+    :param nwb_files: List of NWB file paths.
+    :param experimenter: 'AB' or 'MH', selects the results root.
+    :return: concatenated DataFrame, factor=='motion' & epoch=='baseline' rows only.
+    """
+    print('Loading motion-drift (DREDge) shift test results ...')
+    data_list = []
+    for nwb_file in nwb_files:
+        mouse_id = nwb_reader.get_mouse_id(nwb_file)
+        beh, day = nwb_reader.get_bhv_type_and_training_day_index(nwb_file)
+        if experimenter == 'AB':
+            data_path = ROOT_PATH_AXEL
+        elif experimenter == 'MH':
+            data_path = ROOT_PATH_MYRIAM
+        else:
+            print(f"[WARN] Unknown experimenter '{experimenter}' for {nwb_file}. Skipping.")
+            continue
+
+        session_day = f"{beh}_{day}"
+        file_path = os.path.join(data_path, mouse_id, session_day, 'single_neuron_motion_shift_test',
+                                 f'{mouse_id}_{session_day}_motion_shift_test_results.csv')
+        if os.path.exists(file_path):
+            df = pd.read_csv(file_path)
+            data_list.append(df)
+        else:
+            print(f"[WARN] Motion-drift shift test file not found for {mouse_id} at {file_path}. Skipping.")
+            continue
+
+    if not data_list:
+        print("[WARN] No motion-drift shift test files loaded.")
+        return pd.DataFrame()
+
+    data_table = pd.concat(data_list, ignore_index=True)
+    return data_table
+
+
 def load_spontaneous_reward_lick_times(nwb_files, n_workers=8, load_summary=False):
     """
     Load per-session spontaneous-lick CSVs for a list of NWB files, in
@@ -355,3 +394,4 @@ def load_spontaneous_reward_lick_times(nwb_files, n_workers=8, load_summary=Fals
         df.to_csv(file_path, index=False)
 
     return df
+
