@@ -8,16 +8,22 @@
 
 # Imports
 import os
+import socket
 import json
 import pathlib
-
 import pandas as pd
 import numpy as np
 import re
-
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from scipy.spatial import cKDTree
+
+# Get Allen atlas colors
+hostname = socket.gethostname()
+if 'haas' in hostname:
+    PATH_TO_ATLAS = r'/mnt/lsens-analysis/Axel_Bisi/Anatomy/allen_mouse_bluebrain_barrels_10um_v1.0'
+else:
+    PATH_TO_ATLAS = r'M:\analysis\Axel_Bisi\Anatomy\allen_mouse_bluebrain_barrels_10um_v1.0'
 
 def get_cortical_areas():
     """
@@ -44,8 +50,6 @@ def get_allen_color_dict():
     Get Allen atlas colors formatted as dictionary of RGB arrays.
     :return:
     """
-    # Get Allen atlas colors
-    PATH_TO_ATLAS = r'C:\Users\bisi\.brainglobe\allen_mouse_bluebrain_barrels_10um_v1.0'
 
     with open(os.path.join(PATH_TO_ATLAS, 'structures.json')) as f:
         structures_dict = json.load(f)
@@ -67,7 +71,7 @@ def get_excluded_areas():
                       "onl", "och", "IIn", "or", "opt", "fxpo", "pc", "pm", "py", "pyd", "root", "rust", "sV", "ts",
                       "sptV", "sm", "st", "SEZ", "scp", "dscp", "csc", "scwm", "sup", "tsp", "lfbst", "V3", "tb", "Vn",
                       "IVn", "uf", "Xn", "vhc", "sctv", "vtd", "VS", "vVIIIn", "VIIIn", "von",
-                      'VL', 'I',
+                      'VL', 'I', 'VS'
                       'nan',
                       ]
     ignored_areas = ['ND', 'VISC', 'SPP-ll', 'GU', 'HA', 'HY', 'MA', 'NOT', 'P'] #areas to ignore because too few neurons
