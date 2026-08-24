@@ -63,6 +63,38 @@ def get_passive_hot_to_cold_colors():
                '#AA0531', '#FC9CB5']
     return hotcold
 
+def subset_data_for_area(peth_table, area, params): #TODO: unused, delete or refactor
+    """
+    Subset the PETH table for a specific area based on the nomenclature.
+
+    :param peth_table: PETH table with all mice data
+    :param area: Specific brain area
+    :param params: Plotting parameters
+    :return: Subset of PETH table for the specified area or None if no data
+    """
+    area_nomenclature = params.get('area_nomenclature', 'ccf_parent_acronym')
+    if area_nomenclature == 'area_acronym':
+        peth_area = peth_table[peth_table['area_acronym'] == area]
+        if peth_area.empty:
+            return None
+    elif area_nomenclature == 'target_region':
+        peth_area = peth_table[peth_table['target_region'] == area]
+        # Further filter cortical areas
+        ctx_areas = allen.get_cortical_areas()
+        peth_area = peth_area[peth_area['ccf_parent_acronym'].isin(ctx_areas)]
+        # Apply specific selections
+        peth_area = allen.apply_target_region_filters(peth_area, area)
+    elif area_nomenclature in ['ccf_parent_acronym', 'ccf_acronym']:
+        peth_area = peth_table[peth_table['area_acronym'] == area]
+        if peth_area.empty:
+            return None
+    else:
+        print(f'Unknown area nomenclature: {area_nomenclature}')
+        return None
+
+    return peth_area
+
+
 
 def format_probe_trajectory_dict(nwb_location_dict):
     """
@@ -382,6 +414,28 @@ def render_mpl_table(data, col_width=3.0, row_height=0.625, font_size=14,
 
     return ax.get_figure(), ax
 
+def save_figure_with_options(figure, file_formats, filename, output_dir='', dark_background=False):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    # Make transparent for dark background
+    if dark_background:
+        figure.patch.set_alpha(0)
+        figure.set_facecolor('#f4f4ec')
+        for ax in figure.get_axes():
+            ax.set_facecolor('#f4f4ec')
+        #plt.rcParams.update({'axes.facecolor': '#f4f4ec',  # very pale beige
+        #                        'figure.facecolor': '#f4f4ec'})
+        transparent = True
+        filename = filename + '_transparent'
+    else:
+        transparent = False
+
+    # Save the figure in each specified file format
+    for file_format in file_formats:
+        file_path = os.path.join(output_dir, f"{filename}.{file_format}")
+        figure.savefig(file_path, transparent=transparent, bbox_inches='tight', dpi='figure')
+
+    return
 
 
 def plot_matrix_with_label(matrix, matrix_params, label_colors=None, patch_width=0.02):

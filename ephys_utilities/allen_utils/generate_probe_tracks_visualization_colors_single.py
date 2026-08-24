@@ -50,6 +50,21 @@ EXPERIMENTER_CMAP = {
 DEFAULT_AREA_COLOR = '#888888'
 
 
+def get_output_session_folder(params: dict, m_name: str, session_folder: Path) -> Path:
+    """
+    Build the session folder to save figures into, always under the fixed
+    analysis/<analyzer>/data/<mouse>/<session> tree determined by params['analyzer']
+    (e.g. 'Axel_Bisi'), regardless of which mouse/experimenter the session belongs
+    to or which raw-data path it was read from. The <analyzer>/data root is derived
+    from input_data_path_axel's own analysis/<name>/data pattern, so it stays
+    consistent with wherever that share is mounted. Any missing folders are created
+    by the caller via mkdir.
+    """
+    analysis_root = Path(params['input_data_path_axel']).parent.parent  # .../analysis
+    analyzer_data_root = analysis_root / params['analyzer'] / 'data'
+    return analyzer_data_root / m_name / session_folder.name
+
+
 def find_session_folder(base: Path, m_name: str, date_val) -> Path | None:
     """
     Find the session folder for a given mouse and recording date.
@@ -145,6 +160,65 @@ def add_probe_colored_by_allen_area(scene, probe_track, row_acronyms, probe_name
                 scene.add(Points(seg, name=f"{probe_name}_{row_acronyms[start]}",
                                   colors=colors[start], radius=18, alpha=1.0, res=15))
             start = end
+
+
+def add_single_probe(scene, data_folder, probe_array, probe_table, probe_info, color_by, params,
+                      areas_to_show, target_areas_color_dict, experimenter, allen_color_cache, base_probe_color):
+    """
+    Load one probe's track from data_folder, apply shank filtering / SC trimming /
+    coloring per color_by, and add it to scene. Shared by both the combined
+    (generate_brain_visualization) and per-session (generate_per_session_visualizations)
+    entry points so the loading/coloring logic lives in one place.
+    Returns True if a probe actor was added, False if the probe was skipped.
+    """
+    probe_name        = probe_array.split('.')[0]
+    probe_path        = data_folder / probe_array
+    probe_table_path  = data_folder / probe_table
+
+    rows_selected = None
+    if params['filter_shanks']:
+        probe_track_table = pd.read_csv(probe_table_path)
+        probe_track_table.rename(columns={
+            'Region acronym': 'ccf_acronym',
+            'Distance from first position [um]': 'distance_from_surface',
+            'Position': 'distance_from_surface',
+        }, inplace=True)
+
+        if areas_to_show != ['']:
+            matched = [a for a in probe_track_table['ccf_acronym'].unique() if a in areas_to_show]
+            if not matched:
+                print(f"  No area overlap with areas_to_show — skipping shank.")
+                return False
+            rows_selected = probe_track_table[probe_track_table['ccf_acronym'].isin(matched)].index
+
+    probe_track = np.load(probe_path, allow_pickle=True)
+    probe_track = np.linspace(probe_track[0], probe_track[-1], num=len(probe_track))
+    print(f"  Track shape: {probe_track.shape}")
+
+    probe_target = probe_info['target_area'].values[0]
+    if probe_target == 'SC' and probe_info['depth'].values[0] > 4000:
+        probe_track = probe_track[-200:]
+        print(f"  SC deep probe — trimmed to last 200 rows.")
+
+    if rows_selected is not None and len(rows_selected) > 0:
+        probe_track = probe_track[np.array(rows_selected), :]
+        print(f"  After shank filter: {len(probe_track)} rows.")
+
+    probe_color = base_probe_color
+    if color_by == 'target_area':
+        probe_color = target_areas_color_dict.get(probe_target, '#262626')
+    elif color_by == 'experimenter':
+        probe_color = EXPERIMENTER_CMAP.get(experimenter, '#262626')
+
+    if color_by == 'area_acronym_custom':
+        row_acronyms = get_row_acronyms_from_coords(scene.atlas, probe_track, debug=False)
+        print(f"  Adding probe {probe_name}, split by Allen atlas color")
+        add_probe_colored_by_allen_area(scene, probe_track, row_acronyms, probe_name, allen_color_cache)
+    else:
+        print(f"  Adding probe {probe_name} (color={probe_color})")
+        scene.add(Points(probe_track, name=probe_name, colors=probe_color, radius=18, alpha=1.0, res=15))
+
+    return True
 
 
 def generate_brain_animation(scene, output_folder: Path, fig_stem: str, camera_view: str, params: dict, camera: dict) -> None:
@@ -258,11 +332,17 @@ def generate_brain_visualization(params):
             target_areas_color_dict = dict(zip(target_areas, colors))
         else:
             target_areas_color_dict = TARGET_AREA_CUSTOM_CMAP
+    else:
+        target_areas_color_dict = {}
 
     mouse_info_df = pd.read_excel(params['mouse_info_path'])
     mouse_info_df.rename(columns={'mouse_name': 'mouse_id'}, inplace=True)
-    mouse_info_df = mouse_info_df[mouse_info_df['exclude'] == 0]
-    mouse_info_df = mouse_info_df[mouse_info_df.learning_category.isin(params['learning_category'])]
+    mouse_info_df = mouse_info_df[
+        (mouse_info_df['exclude'] == 0) &
+        (mouse_info_df['exclude_ephys'] == 0) &
+        (mouse_info_df['reward_group'].isin(['R+', 'R-'])) &
+        (mouse_info_df['recording'] == 1) #pertains to day 0
+        ]
 
     mouse_list     = probe_info_df['mouse_name'].unique()
     mouse_list_sub = [m for m in mouse_list if m in mouse_info_df['mouse_id'].unique()]
@@ -324,55 +404,15 @@ def generate_brain_visualization(params):
                     print(f"  Skipping {m_name} probe {probe_id} on {date_val} (missing or invalid).")
                     continue
 
-                probe_path       = data_folder / probe_array
-                probe_table_path = data_folder / probe_table
+                probe_path = data_folder / probe_array
                 probe_arrays_total.append(str(probe_path))
                 print(f"  Loading: {probe_path}")
 
-                # Region table is only needed for shank filtering now — coloring by
-                # Allen area is derived directly from atlas coordinates below.
-                rows_selected = None
-                if params['filter_shanks']:
-                    probe_track_table = pd.read_csv(probe_table_path)
-                    probe_track_table.rename(columns={
-                        'Region acronym': 'ccf_acronym',
-                        'Distance from first position [um]': 'distance_from_surface',
-                        'Position': 'distance_from_surface',
-                    }, inplace=True)
-
-                    if areas_to_show != ['']:
-                        matched = [a for a in probe_track_table['ccf_acronym'].unique() if a in areas_to_show]
-                        if not matched:
-                            print(f"  No area overlap with areas_to_show — skipping shank.")
-                            continue
-                        rows_selected = probe_track_table[probe_track_table['ccf_acronym'].isin(matched)].index
-
-                # Load and interpolate track
-                probe_track = np.load(probe_path, allow_pickle=True)
-                probe_track = np.linspace(probe_track[0], probe_track[-1], num=len(probe_track))
-                print(f"  Track shape: {probe_track.shape}")
-
-                probe_target = probe_info['target_area'].values[0]
-                if probe_target == 'SC' and probe_info['depth'].values[0] > 4000:
-                    probe_track = probe_track[-200:]
-                    print(f"  SC deep probe — trimmed to last 200 rows.")
-
-                if rows_selected is not None and len(rows_selected) > 0:
-                    probe_track = probe_track[np.array(rows_selected), :]
-                    print(f"  After shank filter: {len(probe_track)} rows.")
-
-                if color_by == 'target_area':
-                    probe_color = target_areas_color_dict.get(probe_target, '#262626')
-                elif color_by == 'experimenter':
-                    probe_color = EXPERIMENTER_CMAP.get(experimenter, '#262626')
-
-                if color_by == 'area_acronym_custom':
-                    row_acronyms = get_row_acronyms_from_coords(scene.atlas, probe_track, debug=False)
-                    print(f"  Adding probe {probe_name}, split by Allen atlas color")
-                    add_probe_colored_by_allen_area(scene, probe_track, row_acronyms, probe_name, allen_color_cache)
-                else:
-                    print(f"  Adding probe {probe_name} (color={probe_color})")
-                    scene.add(Points(probe_track, name=probe_name, colors=probe_color, radius=18, alpha=1.0, res=15))
+                added = add_single_probe(scene, data_folder, probe_array, probe_table, probe_info, color_by, params,
+                                          areas_to_show, target_areas_color_dict, experimenter, allen_color_cache,
+                                          probe_color)
+                if not added:
+                    continue
                 mouse_list_sub_in_plot.append(m_name)
 
     scene.render(interactive=False, camera=camera, zoom=zoom)
@@ -403,6 +443,147 @@ def generate_brain_visualization(params):
         generate_brain_animation(scene, output_folder_path, fig_stem, camera_view, params, camera)
 
     scene.close()
+
+
+def generate_per_session_visualizations(params):
+    """
+    Render one figure per (mouse, session) rather than one combined figure across
+    all mice/sessions. Each figure is saved into that session's own folder:
+    {input_data_path}/{mouse_id}/{session_folder}/Anatomy/figures/
+    Reuses the same probe metadata filtering, coloring, and camera settings as
+    generate_brain_visualization, via the shared add_single_probe helper.
+    """
+    color_by        = params['color_by']
+    transparent     = params['transparent']
+    dark_background = params['dark_background']
+    days            = params['day_of_recording']
+    assert isinstance(days, list)
+
+    print(f"[per-session] color_by={color_by}  camera={params['camera_view']}  format={params['file_format']}  days={days}")
+
+    input_data_path_axel   = Path(params['input_data_path_axel'])
+    input_data_path_myriam = Path(params['input_data_path_myriam'])
+
+    brainrender.settings.SCREENSHOT_TRANSPARENT_BACKGROUND = transparent
+    base_probe_color = "#ebf7ff" if dark_background else "#262626"
+    if dark_background:
+        brainrender.settings.BACKGROUND_COLOR = [0, 0, 0]
+
+    camera_view = params['camera_view']
+    camera      = params['camera_options'][camera_view]
+    zoom        = {'frontal': 1.0, 'sagittal': 0.5, 'top': 1.7, 'angled': 1.3}[camera_view]
+
+    areas_to_show = params['areas_to_show']
+    overlay_areas = params['overlay_areas'] if areas_to_show and areas_to_show != [''] else False
+    label_areas   = params['label_areas']
+
+    # Cache of acronym -> hex color, shared across all sessions in this call
+    allen_color_cache = {}
+
+    probe_info_df = pd.read_excel(params['probe_info_path'])
+    probe_info_df = probe_info_df[probe_info_df['valid'] == 1]
+    probe_info_df['day_of_recording'] = probe_info_df['day_of_recording'].astype(int)
+    probe_info_df = probe_info_df[probe_info_df['day_of_recording'].isin(days)]
+
+    if color_by == 'target_area':
+        target_areas = [a for a in probe_info_df['target_area'].unique() if isinstance(a, str)]
+        if params['target_cmap'] == 'auto':
+            random.seed(42)
+            colors = ['#' + hashlib.md5(f'42-{i}'.encode()).hexdigest()[:6] for i in range(len(target_areas))]
+            target_areas_color_dict = dict(zip(target_areas, colors))
+        else:
+            target_areas_color_dict = TARGET_AREA_CUSTOM_CMAP
+    else:
+        target_areas_color_dict = {}
+
+    mouse_info_df = pd.read_excel(params['mouse_info_path'])
+    mouse_info_df.rename(columns={'mouse_name': 'mouse_id'}, inplace=True)
+    mouse_info_df = mouse_info_df[mouse_info_df['exclude'] == 0]
+    mouse_info_df = mouse_info_df[mouse_info_df.learning_category.isin(params['learning_category'])]
+
+    mouse_list     = probe_info_df['mouse_name'].unique()
+    mouse_list_sub = [m for m in mouse_list if m in mouse_info_df['mouse_id'].unique()]
+
+    # Optionally restrict to a specific set of mice, e.g. params['mouse_ids'] = ['AB123', 'MH045'].
+    # None or an empty list means "all mice" (no filtering).
+    mouse_ids = params.get('mouse_ids')
+    if mouse_ids:
+        missing = [m for m in mouse_ids if m not in mouse_list_sub]
+        if missing:
+            print(f"  WARNING: requested mouse_ids not found in filtered probe/mouse tables: {missing}")
+        mouse_list_sub = [m for m in mouse_list_sub if m in mouse_ids]
+    print(f"  Processing {len(mouse_list_sub)} mice: {mouse_list_sub}")
+
+    for m_name in mouse_list_sub:
+        print(f"── Mouse: {m_name}")
+        experimenter = m_name[:2]
+        base = input_data_path_axel if m_name.startswith('AB') else input_data_path_myriam
+        mouse_probes = probe_info_df[probe_info_df['mouse_name'] == m_name]
+
+        probe_color = base_probe_color
+        if color_by == 'reward_group':
+            rg = mouse_probes['reward_group'].values[0]
+            probe_color = 'forestgreen' if rg == 'R+' else 'blueviolet'
+
+        for date_val, date_probes in mouse_probes.groupby('date'):
+
+            session_folder = find_session_folder(base, m_name, date_val)
+            if session_folder is None:
+                continue
+
+            if m_name.startswith('AB') and int(m_name[2:]) < 80:
+                data_folder = session_folder / 'brainreg' / 'manual_segmentation' / 'standard_space' / 'tracks'
+            else:
+                data_folder = session_folder / 'Anatomy' / 'fused' / 'registered' / 'segmentation' / 'atlas_space' / 'tracks'
+
+            if not data_folder.exists() or not any(data_folder.iterdir()):
+                log.warning("  Track folder missing/empty: %s — skipping session.", data_folder)
+                continue
+
+            probe_arrays = sorted(f for f in os.listdir(data_folder) if f.endswith('.npy') and f.startswith('imec'))
+            probe_tables = sorted(f for f in os.listdir(data_folder) if f.endswith('.csv') and f.startswith('imec'))
+            get_probe_id = lambda fname: fname.split('_')[0][-1]  # e.g. "imec0_mapped.npy" → "0"
+
+            # Save into the session's own folder, e.g.
+            # {analysis_root}/{analyzer}/data/{mouse_id}/{session_folder}/Anatomy/figures/
+            # Always determined by params['analyzer'], regardless of which mouse's
+            # own raw-data path the session was read from.
+            output_session_folder = get_output_session_folder(params, m_name, session_folder)
+            output_folder = output_session_folder / 'Anatomy' / 'figures'
+            output_folder.mkdir(parents=True, exist_ok=True)
+
+            scene = Scene(inset=False, title="", screenshots_folder=output_folder, title_color='darkgrey',
+                          atlas_name='allen_mouse_bluebrain_barrels_10um')
+
+            if overlay_areas:
+                for area in areas_to_show:
+                    actor = scene.add_brain_region(area, alpha=0.1, hemisphere='left', silhouette=True)
+                    if label_areas:
+                        scene.add_label(actor, area, size=500, color=None, radius=100, xoffset=0, yoffset=-500, zoffset=100)
+
+            n_added = 0
+            for probe_array, probe_table in zip(probe_arrays, probe_tables):
+                probe_id   = get_probe_id(probe_array.split('.')[0])
+                probe_info = date_probes[date_probes['probe_id'] == int(probe_id)]
+                if probe_info.empty or not probe_info['valid'].values[0]:
+                    print(f"  Skipping {m_name} probe {probe_id} on {date_val} (missing or invalid).")
+                    continue
+
+                added = add_single_probe(scene, data_folder, probe_array, probe_table, probe_info, color_by, params,
+                                          areas_to_show, target_areas_color_dict, experimenter, allen_color_cache,
+                                          probe_color)
+                n_added += int(added)
+
+            if n_added == 0:
+                print(f"  {m_name} / {session_folder.name}: no valid probes — skipping figure.")
+                scene.close()
+                continue
+
+            scene.render(interactive=False, camera=camera, zoom=zoom)
+            fig_name = f"{m_name}_{session_folder.name}_probes_{color_by}_{camera_view}.{params['file_format']}"
+            print(f"  {m_name} / {session_folder.name}: saving {n_added} probe(s) → {output_folder / fig_name}")
+            scene.screenshot(name=fig_name, scale=params['scale'])
+            scene.close()
 
 
 # Define the dictionary with parameters
@@ -451,15 +632,17 @@ params = {
         },
     },
     'camera_view': 'angled',  # 'sagittal', 'frontal', 'top', 'angled'
-    'areas_to_show': [''],  # e.g. ['wS1', 'wM1'] or [''] for none
-    'filter_shanks': True,
-    'overlay_areas': False,
+    'areas_to_show': [],  # e.g. ['wS1', 'wM1'] or [''] for none
+    'filter_shanks': False,
+    'overlay_areas': True,
     'label_areas': False,
     'scale': 3,
     'file_format': 'png',  # 'png', 'svg', 'pdf', 'eps'
     'learning_category': ['moderate','good'],
     'day_of_recording': [0],  # list of day_of_recording values, or [0,1,...] for multiple
-    'animate': False,          # set True to also render a rotating video for each sweep iteration
+    'mouse_ids': [],  # e.g. ['AB123', 'MH045'] to restrict per-session figures to specific mice; None/[] = all mice
+    'analyzer': 'Axel_Bisi',  # always determines where per-session figures are saved: analysis/<analyzer>/data/<mouse>/<session>/Anatomy/figures
+    'animate': True,          # set True to also render a rotating video for each sweep iteration
     'animation': {
         'fps':      30,        # frames per second
         'duration': 8,         # seconds for a full 360° rotation (longer = slower)
@@ -469,13 +652,27 @@ params = {
 }
 
 if __name__ == "__main__":
-    color_by_sweep = ['area_acronym_custom', 'reward_group', 'target_area', 'none']
-    camera_views   = ['sagittal', 'top', 'angled', 'frontal']
-    file_formats   = ['png', 'svg']
-    for color in color_by_sweep:
-        params['color_by'] = color
-        for camera_view in camera_views:
-            params['camera_view'] = camera_view
-            for file_format in file_formats:
-                params['file_format'] = file_format
-                generate_brain_visualization(params)
+    mode = 'combined'  # 'combined' (one figure across all mice/sessions) or 'per_session'
+
+    if mode == 'combined':
+        color_by_sweep = ['area_acronym_custom', 'reward_group', 'target_area', 'none']
+        camera_views   = ['sagittal', 'top', 'angled', 'frontal']
+        file_formats   = ['png', 'svg', 'pdf']
+
+        for color in color_by_sweep:
+            params['color_by'] = color
+            for camera_view in camera_views:
+                params['camera_view'] = camera_view
+                for file_format in file_formats:
+                    params['file_format'] = file_format
+                    generate_brain_visualization(params)
+
+    else:
+        # Single direct call: one figure per mouse/session, uncolored ('none'),
+        # restricted to whichever mice are listed in params['mouse_ids'].
+        params['color_by']    = 'none'
+        params['camera_view'] = 'top'
+        params['file_format'] = 'png'
+        params['mouse_ids']   = ['MH001']  # <-- set the mice to render here
+        params['analyzer']    = 'Axel_Bisi'         # <-- ALL figures save under analysis/Axel_Bisi/data/..., regardless of mouse
+        generate_per_session_visualizations(params)

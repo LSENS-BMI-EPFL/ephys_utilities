@@ -2,22 +2,34 @@
 """
 @author: Axel Bisi
 @project: brain_wide_analysis
-@file: neural_utils.py
+@file: neural_utils_old.py
+@time: 2/11/2024 9:41 PM
 """
 # Imports
-import os
-import json
+import sys
+import warnings
+
 import numpy as np
+import json
 import pandas as pd
+import os
 import scipy.ndimage
 from multiprocessing import Pool
 import matplotlib
+
+import neural_utils_old
+
 matplotlib.use('Agg')  # 'TkAgg' 'Agg' 'Qt5Agg'
 import matplotlib.pyplot as plt
-
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from tqdm import tqdm
-from ephys_utilities.helpers.data_utils import convert_electrode_group_object_to_columns, keep_active_trials
+
+# Custom imports
+sys.path.insert(0, r"M:\analysis\Axel_Bisi\NWB_reader")
+sys.path.insert(0, "/home/bisi/code/NWB_reader")
+
+import NWB_reader_functions as nwb_reader
+from ephys_utilities import allen_utils as allen
 
 TRIAL_MAP = {
     0: 'whisker_miss',
@@ -29,6 +41,142 @@ TRIAL_MAP = {
     6: 'association',
 }
 
+
+def process_single_nwb(nwb, day_to_analyze = 0):
+
+    try:
+        beh_type, day = nwb_reader.get_bhv_type_and_training_day_index(nwb)
+        if day_to_analyze == 'learning' and day !=0:
+            return None
+        elif day_to_analyze == 'expert' and day == 0:
+            return None
+        elif day_to_analyze == 'all' and day <0:
+            return None
+
+        # if day_to_analyze != 'all':
+        #    if day_to_analyze == 0 and day !=0:
+        #        return None
+        #    elif day_to_analyze > 0 and day == 0:
+        #        return None
+
+        unit_table = nwb_reader.get_unit_table(nwb)
+        if unit_table is None or 'bc_label' not in unit_table.columns:
+            return None
+
+        trial_table = nwb_reader.get_trial_table(nwb)
+
+        mouse_id = nwb_reader.get_mouse_id(nwb)
+        session_id = nwb_reader.get_session_id(nwb)
+        sess_metadata = nwb_reader.get_session_metadata(nwb)
+        reward_group = sess_metadata['wh_reward']
+
+        trial_table['mouse_id'] = mouse_id
+        trial_table['session_id'] = session_id
+        trial_table['reward_group'] = reward_group
+        trial_table['context'] = trial_table['context'].astype(str)
+        trial_table['day'] = day
+        trial_table['behaviour'] = beh_type
+
+        if trial_table['context'].str.contains('nan').all():
+            trial_table['context'] = 'active'
+        else:
+            trial_table['context'] = trial_table['context'].fillna('active')
+            trial_table['context'] = trial_table['context'].replace('nan', 'active')
+
+        unit_table['mouse_id'] = mouse_id
+        unit_table['session_id'] = session_id
+        unit_table['reward_group'] = reward_group
+        unit_table['day'] = day
+        unit_table['behaviour'] = beh_type
+
+        #print('Warning: number of root neurons :', mouse_id, len(unit_table[unit_table.ccf_acronym=='root']))
+
+        unit_table = convert_electrode_group_object_to_columns(unit_table)
+
+        return {
+            'nwb': nwb,
+            'trial_table': trial_table,
+            'unit_table': unit_table
+        }
+
+    except Exception as e:
+        print(f"Error processing {nwb}: {e}")
+        return None
+
+
+def combine_ephys_nwb(nwb_list, day_to_analyze=0, max_workers=24):
+    """
+    Combine neural and behavioural data from multiple NWB files using multiprocessing and tqdm.
+    :param nwb_list: list of NWB file paths.
+    :param max_workers: number of parallel processes.
+    :return: (trial_table, unit_table, ephys_nwb_list)
+    """
+    ephys_nwb_list = []
+    trial_table_list = []
+    unit_table_list = []
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(process_single_nwb, nwb, day_to_analyze=day_to_analyze): nwb for nwb in nwb_list}
+
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Loading NWB files"):
+            result = future.result()
+            if result is None:
+                continue
+            ephys_nwb_list.append(result['nwb'])
+            trial_table_list.append(result['trial_table'])
+            unit_table_list.append(result['unit_table'])
+
+    print(f"Found {len(ephys_nwb_list)} NWB files with ephys data.")
+    print(f"Available NWB files {len(ephys_nwb_list)}:", sorted([os.path.basename(nwb) for nwb in ephys_nwb_list]))
+
+    trial_table = pd.concat(trial_table_list, ignore_index=True) if trial_table_list else pd.DataFrame()
+    unit_table = pd.concat(unit_table_list, ignore_index=True) if unit_table_list else pd.DataFrame()
+
+    if not unit_table.empty:
+        print('Removing excluded areas from unit table and creating global unit IDs...')
+        #unit_table = unit_table[~unit_table['ccf_atlas_acronym'].isin(allen.get_excluded_areas())]
+        unit_table = unit_table.reset_index(drop=True)
+        unit_table['unit_id'] = unit_table.index  # global unit identifier
+
+    return trial_table, unit_table, ephys_nwb_list
+
+
+def convert_electrode_group_object_to_columns(data):
+    """
+    Convert electrode group object to dictionary.
+    Creates a new column in the dataframe.
+    :param data: pd.DataFrame containing the NWB electrode group field.
+    :return:
+    """
+    elec_group_list = data['electrode_group'].values
+    elec_group_name = [e.name for e in elec_group_list]
+    # ata['electrode_group'] = elec_group_name
+    data["electrode_group"] = [getattr(e, "name", e) for e in elec_group_list]
+
+    elec_group_location = [e.location.replace('nan', 'None') for e in elec_group_list]
+    elec_group_location_dict = [eval(e) for e in elec_group_location]
+    data['location'] = elec_group_location_dict
+    data['target_region'] = [e.get('area') for e in elec_group_location_dict]
+
+    return data
+
+def convert_electrode_group_object_to_columns(data):
+    """
+    Convert electrode group object to dictionary.
+    Creates a new column in the dataframe.
+    :param data: pd.DataFrame containing the NWB electrode group field.
+    :return: 
+    """
+    elec_group_list = data['electrode_group'].values
+    elec_group_name = [e.name for e in elec_group_list]
+    data['electrode_group'] = elec_group_name
+
+    elec_group_location = [e.location.replace('nan', 'None') for e in elec_group_list]
+    elec_group_location_dict = [eval(e) for e in elec_group_location]
+    data['location'] = elec_group_location_dict
+    data['target_region'] = [e.get('area') for e in elec_group_location_dict]
+
+    return data
 
 def compute_fano_factor_from_spike_train(spike_times, event_times, bin_size, time_start, time_stop):
     """
@@ -58,7 +206,6 @@ def compute_fano_factor_from_spike_train(spike_times, event_times, bin_size, tim
     fano_factor = np.var(spike_counts, axis=0) / np.mean(spike_counts, axis=0)
 
     return fano_factor
-
 
 
 def compute_trial_variance_for_unit(args):
@@ -221,7 +368,6 @@ def compute_trial_variance_for_unit(args):
     return var_list
 
 
-
 def compute_unit_peri_event_histogram(spike_times, event_times, bin_size, time_start, time_stop,
                                       artifact_correction=True):
     """
@@ -310,7 +456,6 @@ def compute_unit_peri_event_histogram(spike_times, event_times, bin_size, time_s
     return peri_stim_hist
 
 
-
 def compute_fano_factor_from_peth(peth, time_start, time_stop):
     """
     Computes Fano factor from peri-event time histogram of a single unit.
@@ -323,7 +468,6 @@ def compute_fano_factor_from_peth(peth, time_start, time_stop):
     fano_factor = np.var(peth, axis=0) / np.mean(peth, axis=0)
 
     return fano_factor
-
 
 
 def compute_baseline_from_spike_train(spike_times, event_times, bas_start, bas_stop):
@@ -347,7 +491,6 @@ def compute_baseline_from_spike_train(spike_times, event_times, bas_start, bas_s
     return baseline_rate
 
 
-
 def compute_baseline_from_peth(peth, bas_start, bas_stop):
     """
     Computes baseline firing rate from peri-event time histogram.
@@ -358,7 +501,6 @@ def compute_baseline_from_peth(peth, bas_start, bas_stop):
     """
     baseline_rate = np.mean(peth[:, bas_start:bas_stop])
     return baseline_rate
-
 
 
 def compute_trial_baseline_from_peth(peth, bas_start, bas_stop):
@@ -373,7 +515,6 @@ def compute_trial_baseline_from_peth(peth, bas_start, bas_stop):
     return baseline_rate
 
 
-
 def compute_zscored_all(peths_array):
     """
     Z-score peri-event time histograms of a population of units.
@@ -383,7 +524,6 @@ def compute_zscored_all(peths_array):
     mean_firing_rates = np.mean(peths_array)
     std_firing_rates = np.std(peths_array)
     return (peths_array - mean_firing_rates) / std_firing_rates
-
 
 
 def normalize_by_std(peths_array):
@@ -397,7 +537,6 @@ def normalize_by_std(peths_array):
     return peths_array / std_firing_rates[:, np.newaxis]
 
 
-
 def compute_zscored_peths(peths_array):
     """
     Z-score peri-event time histograms of a population of units.
@@ -409,7 +548,6 @@ def compute_zscored_peths(peths_array):
     return (peths_array - mean_firing_rates[:, np.newaxis]) / std_firing_rates[:, np.newaxis]
 
 
-
 def compute_zscored_peths_per_unit(peths_array):
     """
     Z-score peri-event time histograms of a population of units, for each unit/population.
@@ -419,7 +557,6 @@ def compute_zscored_peths_per_unit(peths_array):
     mean_firing_rates = np.mean(peths_array, axis=1)
     std_firing_rates = np.std(peths_array, axis=1)
     return (peths_array - mean_firing_rates[np.newaxis, :, :]) / std_firing_rates[np.newaxis, :, :]
-
 
 
 def apply_moving_average(data, window_size):
@@ -435,7 +572,6 @@ def apply_moving_average(data, window_size):
     return smoothed_data
 
 
-
 def halfgaussian_kernel1d(sigma, radius):
     """
     Computes a 1-D Half-Gaussian convolution kernel.
@@ -446,7 +582,6 @@ def halfgaussian_kernel1d(sigma, radius):
     phi_x = phi_x / phi_x.sum()
 
     return phi_x
-
 
 
 def halfgaussian_filter1d(input, sigma, axis=-1, output=None,
@@ -462,7 +597,6 @@ def halfgaussian_filter1d(input, sigma, axis=-1, output=None,
     return scipy.ndimage.convolve1d(input, weights, axis, output, mode, cval, origin)
 
 
-
 def half_gaussian_kernel(size, sigma):
     t = np.arange(0, size)
     kernel = np.exp(-t ** 2 / (2 * sigma ** 2))
@@ -470,13 +604,11 @@ def half_gaussian_kernel(size, sigma):
     return kernel / np.sum(kernel)  # Normalize the kernel
 
 
-
 def causal_gaussian_filter(spike_train, sigma):
     size = int(3 * sigma)  # Choose the size of the kernel
     kernel = half_gaussian_kernel(size, sigma)
     smoothed_train = np.convolve(spike_train, kernel, mode='full')[:len(spike_train)]
     return smoothed_train
-
 
 
 def subtract_baseline_from_peth(peth, bin_size, align_event, time_start, per_trial=False):
@@ -515,7 +647,6 @@ def subtract_baseline_from_peth(peth, bin_size, align_event, time_start, per_tri
         peth_corrected = peth - baseline
 
     return peth_corrected
-
 
 
 def compute_peth_for_unit(args):
@@ -750,7 +881,6 @@ def compute_peth_for_unit(args):
     return peth_list
 
 
-
 def compute_peth_for_unit_block(args):
     """
     Compute PETH for a single unit (cluster) across all trial types and lick flags.
@@ -930,7 +1060,6 @@ def compute_peth_for_unit_block(args):
     return peth_list
 
 
-
 def build_peth_table_parallel(trial_table, unit_table, params, proc_data_path, file_name):
     """
     Build peri-event time histogram dataframe from trial and unit tables using multiprocessing for speed.
@@ -1008,7 +1137,6 @@ def build_peth_table_parallel(trial_table, unit_table, params, proc_data_path, f
     return peth_df
 
 
-
 def build_trial_variance_table_parallel(trial_table, unit_table, params, proc_data_path=None, file_name=None):
     """
     Compute across-trial variance peri-event for each unit in parallel.
@@ -1045,7 +1173,6 @@ def build_trial_variance_table_parallel(trial_table, unit_table, params, proc_da
         print(f"Saved trial-variance table to {output_file}")
 
     return var_df
-
 
 
 def build_peth_table_parallel_block(trial_table, unit_table, params, proc_data_path):
@@ -1125,7 +1252,6 @@ def build_peth_table_parallel_block(trial_table, unit_table, params, proc_data_p
     return peth_df
 
 
-
 def build_peth_table_parallel_inflection(trial_table, unit_table, params, proc_data_path):
     """
     Build peri-event time histogram dataframe from trial and unit tables using multiprocessing for speed,
@@ -1140,7 +1266,7 @@ def build_peth_table_parallel_inflection(trial_table, unit_table, params, proc_d
 
     # Select for passive, optionally
     if not params['include_passive']:
-        trial_table = keep_active_trials(trial_table)
+        trial_table = behavior_analysis_utils.keep_active_trials(trial_table)
 
     # Map performance to outcome in trial_table
     trial_table['outcome'] = trial_table['perf'].astype(int).map(TRIAL_MAP)
@@ -1284,7 +1410,6 @@ def build_peth_table_parallel_inflection(trial_table, unit_table, params, proc_d
     return peth_df
 
 
-
 def build_session_dynamics_table(trial_table, unit_table, params, proc_data_path):  # TODO: make it parallel
     """
     Build session trial-by-trial dynamics dataframe from trial and unit tables.
@@ -1416,3 +1541,758 @@ def build_session_dynamics_table(trial_table, unit_table, params, proc_data_path
             json.dump(params, f)
 
     return sess_dyn_df
+
+
+
+
+def _extract_imec_id(df):
+    """
+    Return a copy of the dataframe with an integer imec_id column.
+
+    If imec_id already exists, it is converted to an integer.
+    Otherwise it is extracted from electrode_group strings such as:
+        imec0_shank0 -> 0
+        imec1        -> 1
+    """
+    df = df.copy()
+
+    if "imec_id" in df.columns:
+        df["imec_id"] = (
+            df["imec_id"]
+            .astype(str)
+            .str.extract(r"(\d+)", expand=False)
+            .astype(int)
+        )
+
+    elif "electrode_group" in df.columns:
+        df["imec_id"] = (
+            df["electrode_group"]
+            .astype(str)
+            .str.extract(r"imec(\d+)", expand=False)
+            .astype(int)
+        )
+
+    else:
+        raise ValueError(
+            "DataFrame contains neither 'imec_id' nor 'electrode_group'."
+        )
+
+    return df
+
+
+def merge_unit_quantifications(unit_table, *dfs, verbose=True):
+    """
+    Merge one or more unit-level dataframes onto unit_table.
+
+    Merge keys:
+        mouse_id
+        session_id
+        cluster_id
+        imec_id
+
+    imec_id is extracted from electrode_group when necessary.
+
+    Parameters
+    ----------
+    unit_table : pd.DataFrame
+        Primary dataframe.
+
+    *dfs : pd.DataFrame
+        Additional dataframes to merge.
+
+    verbose : bool
+        Print alignment diagnostics.
+
+    Returns
+    -------
+    pd.DataFrame
+    """
+
+    base = _extract_imec_id(unit_table)
+
+    keys = [
+        "mouse_id",
+        "session_id",
+        "imec_id",
+        "cluster_id",
+    ]
+
+    for i, df in enumerate(dfs):
+
+        other = _extract_imec_id(df)
+
+        # Ensure merge keys exist
+        missing = [k for k in keys if k not in other.columns]
+        if missing:
+            raise ValueError(
+                f"DataFrame {i} is missing merge keys: {missing}"
+            )
+
+        # Check duplicate merge keys
+        dup = other.duplicated(keys)
+        if dup.any():
+            print(
+                f"\nWARNING: DataFrame {i} contains "
+                f"{dup.sum()} duplicated merge keys."
+            )
+            print(
+                other.loc[dup, keys]
+                .sort_values(["mouse_id", "session_id"])
+            )
+
+        # Compare keys
+        compare = base[keys].merge(
+            other[keys],
+            how="outer",
+            indicator=True,
+        )
+
+        missing_in_other = compare["_merge"] == "left_only"
+        missing_in_base = compare["_merge"] == "right_only"
+
+        if verbose:
+
+            if missing_in_other.any():
+                print(
+                    f"\nDataFrame {i}: "
+                    f"{missing_in_other.sum()} unit(s) from unit_table "
+                    "were not found."
+                )
+
+                summary = (
+                    compare.loc[missing_in_other]
+                    .groupby(["mouse_id", "session_id"])
+                    .size()
+                    .rename("n_missing")
+                    .reset_index()
+                    .sort_values(["mouse_id", "session_id"])
+                )
+
+                print(summary.to_string(index=False))
+
+            if missing_in_base.any():
+                print(
+                    f"\nDataFrame {i}: "
+                    f"{missing_in_base.sum()} unit(s) are not present "
+                    "in unit_table."
+                )
+
+                summary = (
+                    compare.loc[missing_in_base]
+                    .groupby(["mouse_id", "session_id"])
+                    .size()
+                    .rename("n_extra")
+                    .reset_index()
+                    .sort_values(["mouse_id", "session_id"])
+                )
+
+                print(summary.to_string(index=False))
+
+        # Merge only new columns
+        cols_to_merge = [
+            c for c in other.columns
+            if c not in keys and c not in base.columns
+        ]
+
+        base = base.merge(
+            other[keys + cols_to_merge],
+            on=keys,
+            how="left",
+            validate="one_to_one",
+        )
+
+    return base
+
+def compute_presence_ratio(unit_df, spike_times_col='spike_times', bin_size=60.0,
+                            session_col='session_id'):
+    """Compute the fraction of 60-s recording bins containing >=1 spike, per unit.
+
+    Recording boundaries (earliest -> latest spike) are computed PER SESSION
+    (grouped by session_col), not pooled across the whole unit_df - so units
+    from different sessions are scored against their own session's duration.
+
+    Returns
+    -------
+    pd.Series
+        Presence ratio for each unit, aligned with unit_df.index.
+    """
+    out = pd.Series(0.0, index=unit_df.index)
+
+    for _, session_df in unit_df.groupby(session_col):
+        all_spikes = [np.asarray(s) for s in session_df[spike_times_col]]
+        non_empty = [s for s in all_spikes if len(s) > 0]
+        if not non_empty:
+            continue
+
+        rec_start = min(np.min(s) for s in non_empty)
+        rec_end = max(np.max(s) for s in non_empty)
+        n_bins = int(np.ceil((rec_end - rec_start) / bin_size))
+        if n_bins == 0:
+            continue
+
+        for idx, s in zip(session_df.index, all_spikes):
+            if len(s) == 0:
+                continue
+            bin_indices = ((s - rec_start) // bin_size).astype(int)
+            n_present_bins = len(np.unique(bin_indices))
+            out.loc[idx] = n_present_bins / n_bins
+
+    return out
+
+
+def compute_coverage_ratio(unit_df, spike_times_col='spike_times', session_col='session_id'):
+    """Fraction of the recording duration spanned by each unit's own spike train,
+    reimplemented from baseline_analysis.py's filter_units_by_quality
+    (cicada_analysis/templates/baseline_analysis.py) - same formula, applied
+    here directly rather than importing that function (which expects to run
+    as part of its own quality-filtering pipeline).
+
+    Recording duration is derived PER SESSION (grouped by session_col): earliest
+    first-spike and latest last-spike across ALL units within that session's
+    unit_df (should be the full, unfiltered per-session unit table - not already
+    subset to e.g. bc_label=='good' - since the population span is what
+    "coverage" is relative to).
+
+    Returns a pd.Series aligned to unit_df's index; 1.0 = spikes span the full
+    recording, 0.0 for units with <2 spikes or an unusable duration.
+    """
+    out = pd.Series(0.0, index=unit_df.index)
+
+    for _, session_df in unit_df.groupby(session_col):
+        all_spikes = [np.asarray(s) for s in session_df[spike_times_col]]
+        firsts = [s[0] for s in all_spikes if len(s) > 0]
+        lasts = [s[-1] for s in all_spikes if len(s) > 0]
+        if firsts and lasts:
+            rec_start = min(firsts)
+            rec_dur = max(lasts) - rec_start
+        else:
+            rec_start, rec_dur = 0.0, 0.0
+
+        for idx, s in zip(session_df.index, all_spikes):
+            if len(s) > 1 and rec_dur > 0:
+                out.loc[idx] = (s[-1] - s[0]) / rec_dur
+
+    return out
+
+
+
+def compute_presence_coverage_metrics(unit_table):
+    """ Computes presence and coverage ratio to units."""
+    unit_table['coverage_ratio'] = compute_coverage_ratio(unit_table)
+    unit_table['presence_ratio'] = compute_presence_ratio(unit_table)
+    return unit_table
+
+DEFAULT_METRIC_THRESHOLDS = { #min/max thresholds for good unit classification, based on Bombcell et al. 2023
+    # Bombcell metrics (min val, max val)
+    "nSpikes":                           (300,   None),
+    "percentageSpikesMissing_gaussian":  (None,  20),
+    "fractionRPVs_estimatedTauR":        (None,  0.1),
+    "maxDriftEstimate":                  (100,   1000),
+    "presenceRatio":                     (0.7,    None), #bombcell implementation
+    "isolationDistance" :                (20,    None),
+    "Lratio":                            (None,  0.3),
+    # Our metrics
+    "presence_ratio": (0.5, None),
+    "coverage_ratio": (0.9, None),
+    "drift_shift_test_pval": (0.01, None),
+    "drift_abs_r": (0.5, None),
+}
+ROUTE_THRESHOLDS = {
+    "nSpikes": "mua",
+    "percentageSpikesMissing_gaussian": "mua",
+    "percentageSpikesMissing_symmetric": "mua",
+    "fractionRPVs_estimatedTauR": "mua",
+    "presenceRatio": "mua",
+    "isolationDistance": "mua",
+    "Lratio": "mua",
+    "driftIndependence": "mua",
+    "presence_ratio": "mua",
+    "coverage_ratio": "mua",
+}
+
+# metrics folded into a single joint criterion - see docstring below
+JOINT_METRICS = ("drift_abs_r", "drift_shift_test_pval")
+
+
+def _metric_ok(vals, lo, hi):
+    """NaN -> ignored (True); else in-range check against (lo, hi), inf-padded."""
+    lo = -np.inf if lo is None else lo
+    hi = np.inf if hi is None else hi
+    return np.where(np.isnan(vals), True, (vals >= lo) & (vals <= hi))
+
+
+def classify_units_quality(unit_table: pd.DataFrame,
+                            thresholds: dict = None,
+                            exclude: list = ['Lratio', 'isolationDistance', 'presenceRatio', 'maxDriftEstimate'],
+                            label_col: str = "quality_label") -> pd.DataFrame:
+    """
+    Vectorized bombcell-style good/mua classification. A NaN value for a metric is
+    IGNORED for that unit (doesn't count as a fail), not treated as an automatic fail.
+    exclude: metric names to skip entirely for ALL units (e.g. ['isolationDistance']).
+    label_col: new quality metric categorical.
+
+    drift_abs_r and drift_shift_test_pval are evaluated JOINTLY as a single combined
+    criterion rather than two independent metrics: a unit only fails the drift check
+    if BOTH are simultaneously out of range. Passing either one on its own is enough
+    to pass the combined check (protects against either metric alone being noisy).
+    Excluding either name in `exclude` drops the whole joint check.
+    """
+    thresholds = thresholds or DEFAULT_METRIC_THRESHOLDS
+    exclude = set(exclude or [])
+    nonsoma_mask = unit_table["bc_label"].eq("non-soma")
+    out = unit_table.copy()
+    n = len(unit_table)
+    pass_mask = np.ones(n, dtype=bool)
+
+    cols = [m for m in thresholds if m not in exclude and m not in JOINT_METRICS
+            and m in unit_table.columns]
+    if cols:
+        lo = np.array([thresholds[m][0] if thresholds[m][0] is not None else -np.inf for m in cols])
+        hi = np.array([thresholds[m][1] if thresholds[m][1] is not None else np.inf for m in cols])
+        vals = unit_table[cols].to_numpy(dtype=float, copy=False)   # (n, k)
+        in_range = (vals >= lo) & (vals <= hi)
+        ok = np.where(np.isnan(vals), True, in_range)
+        pass_mask &= ok.all(axis=1)
+
+    if not exclude.intersection(JOINT_METRICS):
+        present = [m for m in JOINT_METRICS if m in unit_table.columns]
+        if len(present) == 2:
+            r_ok = _metric_ok(unit_table["drift_abs_r"].to_numpy(dtype=float, copy=False),
+                               *thresholds.get("drift_abs_r", (None, None)))
+            p_ok = _metric_ok(unit_table["drift_shift_test_pval"].to_numpy(dtype=float, copy=False),
+                               *thresholds.get("drift_shift_test_pval", (None, None)))
+            pass_mask &= (r_ok | p_ok)          # fail only if BOTH fail together
+        elif present:
+            missing = [m for m in JOINT_METRICS if m not in unit_table.columns]
+            warnings.warn(f"joint drift check needs both {JOINT_METRICS}; "
+                           f"missing {missing} - skipping drift check entirely")
+
+    out[label_col] = np.where(pass_mask, "good", "mua")
+    out[label_col] = np.where(nonsoma_mask, "non-soma", out[label_col])
+    return out
+
+
+def keep_active_from_whisker_onset(trial_df):
+    """
+    Remove auditory blocks at onset of session, where mice were not yet engaged in the task, before whisker introduction
+    :param trial_df: trial table dataframe with active trials only
+    :return:
+    """
+    print('Keeping active trials and removing auditory onset blocks...')
+
+    # Keep active trials
+    trial_df = trial_df[
+        (~trial_df['context'].isin(['passive']))
+        # & (trial_df['perf'] != 6)
+        # & (trial_df['early_lick'] == 0)
+    ]
+    print(f'Number of active trials: {len(trial_df)}')
+    df = trial_df.copy()
+    print('Getting whisker trial indices...')
+
+    # Find first whisker trial per mouse
+    first_whisker_id = (
+        df[df['trial_type'] == 'whisker_trial']
+        .groupby('mouse_id')['trial_id']
+        .min()
+        .rename('first_whisker_id')
+    )
+
+    # Merge to get first whisker trial per mouse
+    df = df.merge(first_whisker_id, on='mouse_id', how='left')
+
+    # Keep only trials >= first whisker trial
+    df = df[df['trial_id'] >= df['first_whisker_id']].copy()
+    # Reindex trial_id to start at 0 from first whisker trial
+    df['trial_id'] = df['trial_id'] - df['first_whisker_id']
+
+    # Define also a whisker_trial_id, just for whisker trials
+    df['whisker_trial_id'] = np.nan
+    whisker_mask = df['trial_type'] == 'whisker_trial'
+    df.loc[whisker_mask, 'whisker_trial_id'] = df.loc[whisker_mask].groupby('mouse_id').cumcount()
+    df['whisker_trial_id'] = df['whisker_trial_id'].astype('Int64')  # keep as nullable integer
+
+    # Drop helper column
+    df.drop(columns='first_whisker_id', inplace=True)
+
+    return df
+
+
+def keep_passive_mice(data_df):
+    print('Filtering for mice with passive pre/post data...')
+    mouse_ids = data_df['mouse_id'].unique()
+    passive_mouse_ids = []
+    for m in mouse_ids:
+        if m.startswith('AB'):
+            try:
+                if int(m[2:]) >= 116:
+                    if m not in ['AB144', 'AB155']:
+                        passive_mouse_ids.append(m)
+            except ValueError:
+                continue  # skip if name is wrong
+        elif m.startswith('MH'):
+            if m not in ['MH013', 'MH062']:  # no passive post for MH013
+                passive_mouse_ids.append(m)
+    return data_df[data_df['mouse_id'].isin(passive_mouse_ids)]
+
+
+def keep_shared_areas(data_df, nomenclature, n_min_units=10, n_min_mice=3):
+    print(f'Filtering for R+/R- shared areas in {nomenclature} with at least {n_min_units} units '
+          f'and {n_min_mice} mice in each reward group...')
+
+    # Intersect areas across reward groups
+    areas_rplus = data_df[data_df['reward_group'] == 1][nomenclature].unique()
+    areas_rminus = data_df[data_df['reward_group'] == 0][nomenclature].unique()
+    areas_intersect = set(areas_rplus).intersection(set(areas_rminus))
+    print(f'Found {len(areas_intersect)} R+/R- shared areas: {areas_intersect}')
+
+    # Count unique elements
+    if n_min_units > 0 or n_min_mice > 0:
+        bc_mask = data_df['bc_label'].isin(['good', 'mua'])
+
+        # Count unique units per area and reward group
+        n_units_rplus = (
+            data_df[(data_df['reward_group'] == 1) & bc_mask]
+            .groupby(nomenclature)['unit_id']
+            .nunique()
+        )
+        n_units_rminus = (
+            data_df[(data_df['reward_group'] == 0) & bc_mask]
+            .groupby(nomenclature)['unit_id']
+            .nunique()
+        )
+
+        # Count unique mice per area and reward group
+        n_mice_rplus = (
+            data_df[(data_df['reward_group'] == 1) & bc_mask]
+            .groupby(nomenclature)['mouse_id']
+            .nunique()
+        )
+        n_mice_rminus = (
+            data_df[(data_df['reward_group'] == 0) & bc_mask]
+            .groupby(nomenclature)['mouse_id']
+            .nunique()
+        )
+
+        # Filter shared areas based on both unit and mouse counts
+        shared_areas = []
+        for area in areas_intersect:
+            units_ok = (
+                    (area in n_units_rplus.index and n_units_rplus[area] >= n_min_units)
+                    and (area in n_units_rminus.index and n_units_rminus[area] >= n_min_units)
+            )
+            mice_ok = (
+                    (area in n_mice_rplus.index and n_mice_rplus[area] >= n_min_mice)
+                    and (area in n_mice_rminus.index and n_mice_rminus[area] >= n_min_mice)
+            )
+            if units_ok and mice_ok:
+                shared_areas.append(area)
+
+        removed_areas = areas_intersect - set(shared_areas)
+        if len(removed_areas) > 0:
+            print(f'Removed {len(removed_areas)} areas with insufficient counts:')
+            for area in removed_areas:
+                print(f"  {area}: "
+                      f"R+ {n_units_rplus.get(area, 0)}u/{n_mice_rplus.get(area, 0)}m, "
+                      f"R- {n_units_rminus.get(area, 0)}u/{n_mice_rminus.get(area, 0)}m")
+    else:
+        shared_areas = list(areas_intersect)
+
+    print(f'Keeping {len(shared_areas)} shared areas meeting both unit and subject thresholds.')
+    if len(shared_areas) > 0:
+        print("Shared areas:", shared_areas)
+
+    # Filter dataset
+    data_df = data_df[data_df[nomenclature].isin(shared_areas)]
+    return data_df, shared_areas
+
+
+def keep_units_params(unit_df, filter_params):
+    """
+    Keep only units matching filter parameters.
+    :param unit_df: pd.DataFrame , unit table.
+    :param filter_params: dict, keys are column names, values are values to keep (or list of values).
+    :return:
+    """
+    print('Filtering units...')
+    for key, val in filter_params.items():
+        if key not in unit_df.columns:
+            print(f'Warning: {key} not in unit table columns, skipping this filter.')
+        else:
+            if key == 'bc_label':
+                if isinstance(val, str):
+                    val = [val]
+                unit_df = unit_df[unit_df[key].isin(val)]
+            if key == 'firing_rate':
+                unit_df = unit_df[unit_df[key].astype(float) >= val]
+
+                # ADD filters as needed
+
+    return unit_df
+
+
+def keep_mouse_neuron_pairs(target_df, pairs_df):
+    """
+    Keep only specified mouse/neuron pairs in the PETH dataframe.
+    :param target_df: pd.DataFrame , target dataframe to filter.
+    :param pairs_df: pd.DataFrame , dataframe with 'mouse_id' and 'neuron_id' columns specifying pairs to keep.
+    :return:
+    """
+    # Ensure proper columns
+    if not {'mouse_id', 'neuron_id'}.issubset(pairs_df.columns):
+        raise ValueError("`pairs_df` must contain 'mouse_id' and 'neuron_id' columns.")
+
+    # Merge to select matching rows
+    matched = target_df.merge(pairs_df[['mouse_id', 'neuron_id']],
+                              on=['mouse_id', 'neuron_id'],
+                              how='inner')  # inner join keeps only matches
+    print(f'Filtered to {len(matched)} mouse/neuron pairs from {len(target_df)} total.')
+    return matched
+
+
+def keep_units_with_conditions(peth_df, conditions):
+    # Keep units/mice that contain all conditions to be compared
+    conditions = list(conditions)
+    # Ignore the conditions that include diff as I don't always plot them but they are computed
+    # conditions = [c for c in conditions if 'diff' not in c]
+
+    # Keep only units that have PETHs for exactly all of those outcomes
+    units_with_all_conditions = (
+        peth_df.groupby('unit_id')['outcome']
+        .apply(lambda x: set(conditions).issubset(set(x)))
+        # .apply(lambda x: set(conditions) == set(x))
+    )
+
+    # Filter the table to only include those units
+    units_to_keep = units_with_all_conditions[units_with_all_conditions].index
+    peth_df_filtered = peth_df[peth_df['unit_id'].isin(units_to_keep)]
+
+    # Number of units excluded
+    n_excluded = len(units_with_all_conditions) - len(units_to_keep)
+
+    # Excluded mice
+    excluded_mice = peth_df[~peth_df['unit_id'].isin(units_to_keep)]['mouse_id'].unique()
+    print(f'Filtered out {n_excluded} units missing some of the required conditions: {conditions}.')
+    print(f'Excluded mice: {excluded_mice}')
+
+    return peth_df_filtered
+
+
+def get_passive_conditions_fast(peth_df):
+    print('Computing passive conditions (pre-post diffs and diff-of-diffs) fast...')
+
+    # Keep metadata
+    metadata_cols = [c for c in peth_df.columns if c not in ['unit_id', 'peth', 'outcome']]
+    metadata_df = peth_df.groupby('unit_id')[metadata_cols].first().reset_index()
+
+    # Filter unit_id that do not have both passive pre and passive post outcomes
+    # Step 1: Find all units and the contexts they have
+    contexts_per_unit = peth_df.groupby('unit_id')['context'].unique()
+
+    # Step 2: Identify units missing one or both of the desired contexts
+    required = {'passive_pre', 'passive_post'}
+    bad_units = [u for u, ctxs in contexts_per_unit.items() if not required.issubset(set(ctxs))]
+    bad_mice = peth_df[peth_df['unit_id'].isin(bad_units)]['mouse_id'].unique()
+
+    # Step 3: Count and print them
+    # print(f"Units missing 'passive_pre' or 'passive_post': {len(bad_units)}")
+    # print("Excluded units:", bad_units)
+    # print(f"Affected mice: {bad_mice}")
+
+    # Step 4: Exclude them from the dataframe
+    df_filtered = peth_df[~peth_df['unit_id'].isin(bad_units)].copy()
+
+    # Optional: check result
+    print(f"Remaining units: {df_filtered['unit_id'].nunique()}")
+    # -------------
+
+    # Keep only passive, no-lick trials
+    df = peth_df.query("context in ['passive_pre','passive_post'] and lick_flag == 0").copy()
+
+    # Make a key for each condition
+    df["cond_key"] = df["trial_type"] + "_" + df["context"]
+
+    # Pivot into wide format: one row per unit_id, one column per cond_key
+    wide = (
+        df.pivot(index="unit_id", columns="cond_key", values="peth")
+        .reindex(columns=[
+            "whisker_trial_passive_pre", "whisker_trial_passive_post",
+            "auditory_trial_passive_pre", "auditory_trial_passive_post"
+        ])
+    )
+
+    # Compute diffs vectorized
+    wide["whisker_diff"] = wide["whisker_trial_passive_post"] - wide["whisker_trial_passive_pre"]
+    wide["auditory_diff"] = wide["auditory_trial_passive_post"] - wide["auditory_trial_passive_pre"]
+    wide["auditory_diff_whisker_diff"] = wide["auditory_diff"] - wide["whisker_diff"]
+
+    # Rename for output consistency
+    wide = wide.rename(columns={
+        "whisker_trial_passive_pre": "whisker_passive_pre",
+        "whisker_trial_passive_post": "whisker_passive_post",
+        "auditory_trial_passive_pre": "auditory_passive_pre",
+        "auditory_trial_passive_post": "auditory_passive_post",
+    }).reset_index()
+
+    # Melt to long format: one row per unit_id × outcome
+    df_long = wide.melt(
+        id_vars=["unit_id"],
+        value_vars=[
+            "whisker_passive_pre", "whisker_passive_post",
+            "auditory_passive_pre", "auditory_passive_post",
+            "whisker_diff", "auditory_diff", "auditory_diff_whisker_diff"
+        ],
+        var_name="outcome",
+        value_name="peth"
+    )
+
+    # Merge back metadata
+    df_long = df_long.merge(metadata_df, on="unit_id", how="left")
+
+    return df_long
+
+
+def get_block_perf_conditions_fast(peth_df):
+    """
+    Compute per-unit differences of neural activity for block_perf_type (high vs low),
+    trial_type (whisker vs auditory), and outcome (hit vs miss).
+
+    Returns a long-format DataFrame with columns: unit_id, outcome, peth, plus metadata.
+    """
+    print("Computing high/low state differences for each trial type...")
+
+    var_to_plot = 'peth' if 'peth' in peth_df.columns else 'trial_var'
+
+    # Keep metadata
+    metadata_cols = [c for c in peth_df.columns if
+                     c not in ['unit_id', var_to_plot, 'outcome', 'block_perf_type', 'trial_type']]
+    metadata_df = peth_df.groupby('unit_id')[metadata_cols].first().reset_index()
+
+    # Step 1: keep only relevant trials
+    df = peth_df.copy()
+
+    # Step 2: make a condition key: trial_type + block_perf_type + outcome
+    df['cond_key'] = df['outcome'] + "_" + df['block_perf_type']
+
+    # Expected condition keys
+    keys = [
+        "whisker_hit_high", "whisker_miss_high",
+        "whisker_hit_low", "whisker_miss_low",
+        "auditory_hit_high",  # "auditory_miss_high",
+        "auditory_hit_low",  # "auditory_miss_low"
+        "false_alarm_high", "false_alarm_low",
+        "correct_reject_high", "correct_reject_low",
+        "whisker_stim_high", "whisker_stim_low",
+    ]
+
+    # Pivot into wide format: one row per unit_id, one column per cond_key
+    wide = (
+        df.pivot(index="unit_id", columns="cond_key", values=var_to_plot)
+        .reindex(columns=keys)
+    )
+
+    # Compute differences
+    wide["whisker_hit_high_low_diff"] = wide["whisker_hit_high"] - wide["whisker_hit_low"]
+    wide["whisker_miss_high_low_diff"] = wide["whisker_miss_high"] - wide["whisker_miss_low"]
+    wide["whisker_high_hit_miss_diff"] = wide["whisker_hit_high"] - wide["whisker_miss_high"]
+    wide["whisker_low_hit_miss_diff"] = wide["whisker_hit_low"] - wide["whisker_miss_low"]
+    wide["auditory_hit_high_low_diff"] = wide["auditory_hit_high"] - wide["auditory_hit_low"]
+    # wide["auditory_miss_high_low_diff"] = wide["auditory_miss_high"] - wide["auditory_miss_low"]
+    # wide["auditory_high_hit_miss_diff"] = wide["auditory_hit_high"] - wide["auditory_miss_high"]
+    # wide["auditory_low_hit_miss_diff"] = wide["auditory_hit_low"] - wide["auditory_miss_low"]
+    wide["false_alarm_high_low_diff"] = wide["false_alarm_high"] - wide["false_alarm_low"]
+    wide["correct_reject_high_low_diff"] = wide["correct_reject_high"] - wide["correct_reject_low"]
+    wide["whisker_stim_high_low_diff"] = wide["whisker_stim_high"] - wide["whisker_stim_low"]
+
+    # Define keys for melting
+    diff_keys = [
+        "whisker_hit_high_low_diff", "whisker_miss_high_low_diff",
+        "whisker_high_hit_miss_diff", "whisker_low_hit_miss_diff",
+        "auditory_hit_high_low_diff",  # "auditory_miss_high_low_diff",
+        # "auditory_high_hit_miss_diff", "auditory_low_hit_miss_diff",
+        "false_alarm_high_low_diff", "correct_reject_high_low_diff",
+        "whisker_stim_high_low_diff"
+    ]
+
+    all_keys = keys + diff_keys
+
+    df_long = wide[all_keys].reset_index().melt(
+        id_vars="unit_id",
+        value_vars=all_keys,
+        var_name="outcome",
+        value_name=var_to_plot
+    )
+
+    # Merge back metadata
+    df_long = df_long.merge(metadata_df, on="unit_id", how="left")
+
+    return df_long
+
+
+def get_inflection_conditions_fast(peth_df):
+    """
+    Compute per-unit differences of neural activity for block_id (pre-learning, during, post-learning),
+    trial_type (whisker vs auditory), and outcome (hit vs miss).
+
+    Returns a long-format DataFrame with columns: unit_id, outcome, peth, plus metadata.
+    """
+    print("Computing pre/during/post inflection blocks differences for each trial type...")
+
+    # Keep metadata
+    var_to_plot = 'peth' if 'peth' in peth_df.columns else 'trial_var'
+    metadata_cols = [c for c in peth_df.columns if c not in ['unit_id', var_to_plot, 'outcome', 'block', 'trial_type']]
+    metadata_df = peth_df.groupby('unit_id')[metadata_cols].first().reset_index()
+
+    # Step 1: keep only relevant trials
+    df = peth_df.copy()
+
+    # Step 2: make a condition key: trial_type + block_id + outcome
+    df['cond_key'] = df['trial_type'] + "_" + df['block']
+
+    # Expected condition keys
+    keys = [
+        "whisker_trial_preinflection", "whisker_trial_during", "whisker_trial_postinflection",
+        "auditory_trial_preinflection", "auditory_trial_during", "auditory_trial_postinflection",
+    ]
+
+    # Pivot into wide format: one row per unit_id, one column per cond_key
+    wide = (
+        df.pivot(index="unit_id", columns="cond_key", values=var_to_plot)
+        .reindex(columns=keys)
+    )
+
+    # Compute differences
+    wide["whisker_pre_post_diff"] = wide["whisker_trial_postinflection"] - wide["whisker_trial_preinflection"]
+    wide["auditory_pre_post_diff"] = wide["auditory_trial_postinflection"] - wide["auditory_trial_preinflection"]
+
+    diff_keys = ["whisker_pre_post_diff", "auditory_pre_post_diff"]
+    all_keys = keys + diff_keys
+
+    # Rename
+    wide = wide.rename(columns={
+        "whisker_trial_preinflection": "whisker_preinflection",
+        "whisker_trial_during": "whisker_during",
+        "whisker_trial_postinflection": "whisker_postinflection",
+        "auditory_trial_preinflection": "auditory_preinflection",
+        "auditory_trial_during": "auditory_during",
+        "auditory_trial_postinflection": "auditory_postinflection",
+    }).reset_index()
+
+    df_long = wide.melt(
+        id_vars="unit_id",
+        value_vars=[
+            "whisker_preinflection", "whisker_during", "whisker_postinflection",
+            "auditory_preinflection", "auditory_during", "auditory_postinflection",
+            "whisker_pre_post_diff", "auditory_pre_post_diff"
+        ],
+        var_name="outcome",
+        value_name=var_to_plot
+    )
+
+    # Merge back metadata
+    df_long = df_long.merge(metadata_df, on="unit_id", how="left")
+
+    return df_long
+
+
+

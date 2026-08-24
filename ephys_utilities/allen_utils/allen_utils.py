@@ -493,6 +493,37 @@ def apply_target_region_filters(peth_table, area):
 
     return peth_area
 
+def subset_data_for_area(data_df, area, params): #TODO: unused, delete or refactor
+    """
+    Subset the PETH table for a specific area based on the nomenclature.
+
+    :param data_df: PETH table with all mice data
+    :param area: Specific brain area
+    :param params: Plotting parameters
+    :return: Subset of PETH table for the specified area or None if no data
+    """
+    area_nomenclature = params.get('area_nomenclature', 'ccf_parent_acronym')
+    if area_nomenclature == 'area_acronym':
+        peth_area = data_df[data_df['area_acronym'] == area]
+        if peth_area.empty:
+            return None
+    elif area_nomenclature == 'target_region':
+        peth_area = data_df[data_df['target_region'] == area]
+        # Further filter cortical areas
+        ctx_areas = get_cortical_areas()
+        peth_area = peth_area[peth_area['ccf_parent_acronym'].isin(ctx_areas)]
+        # Apply specific selections
+        peth_area = apply_target_region_filters(peth_area, area)
+    elif area_nomenclature in ['ccf_parent_acronym', 'ccf_acronym']:
+        peth_area = data_df[data_df['area_acronym'] == area]
+        if peth_area.empty:
+            return None
+    else:
+        print(f'Unknown area nomenclature: {area_nomenclature}')
+        return None
+
+    return peth_area
+
 def compute_physical_coordinates_from_df(df, target_coords):
     """
     Compute approximate AP, ML, DV coordinates from entry points and trajectory angles in physical space for each recording site.
