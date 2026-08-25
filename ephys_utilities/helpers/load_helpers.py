@@ -306,7 +306,7 @@ def load_motion_dredge_shift_test_results(nwb_files, experimenter='AB'):
             data_list.append(df)
         else:
             print(f"[WARN] Motion-drift shift test file not found for {mouse_id} at {file_path}. Adding NaN row.")
-            data_list.append(pd.DataFrame([{'mouse_id': mouse_id, 'session_id': session_day}]))
+            #data_list.append(pd.DataFrame([{'mouse_id': mouse_id, 'session_id': session_day}]))
             continue
 
 

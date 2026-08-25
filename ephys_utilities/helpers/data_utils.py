@@ -119,6 +119,8 @@ def combine_ephys_nwb(nwb_list, day_to_analyze=0, max_workers=24):
 
 
 
+
+
 def convert_electrode_group_object_to_columns(data):
     """
     Convert electrode group object to dictionary.
