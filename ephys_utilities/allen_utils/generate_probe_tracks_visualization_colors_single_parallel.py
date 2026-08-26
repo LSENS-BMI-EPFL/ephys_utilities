@@ -466,7 +466,7 @@ def run_combined_sweep_parallel(base_params: dict, color_by_sweep: list, camera_
     across the outer sweep only — a single combined figure is still built serially
     within one process.
 
-    max_workers defaults to cpu_count() - 1. Since each worker opens its own
+    MAX_WORKERS defaults to cpu_count() - 1. Since each worker opens its own
     brainrender/VTK context, keep this modest (e.g. 3-6) if you hit GPU/memory
     issues with many workers running at once.
     """
@@ -612,8 +612,8 @@ def generate_per_session_visualizations(params: dict, parallel: bool = False, ma
     Set parallel=True to process different mice concurrently in separate worker
     processes (via _process_single_mouse_sessions). Parallelism is across mice,
     not within a single mouse's sessions, and each worker builds its own
-    brainrender/VTK Scene — keep max_workers modest if you hit GPU/memory issues.
-    max_workers defaults to cpu_count() - 1.
+    brainrender/VTK Scene — keep MAX_WORKERS modest if you hit GPU/memory issues.
+    MAX_WORKERS defaults to cpu_count() - 1.
     """
     color_by = params['color_by']
     days     = params['day_of_recording']

@@ -20,7 +20,7 @@ import multiprocessing as mp
 
 hostname = socket.gethostname()
 if 'haas' in hostname:
-    N_WORKERS = 80
+    MAX_WORKERS = 100
     ROOT_PATH_AXEL = pathlib.Path('/mnt/lsens-analysis/Axel_Bisi/combined_results_ks4')
     ROOT_PATH_MYRIAM = pathlib.Path('/mnt/lsens-analysis/Myriam_Hamon/combined_results_ks4')
 
@@ -28,6 +28,7 @@ if 'haas' in hostname:
     import NWB_reader_functions as nwb_reader
 
 else:
+    MAX_WORKERS = 20
     ROOT_PATH_AXEL = pathlib.Path(r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\analysis\Axel_Bisi\combined_results')
     ROOT_PATH_MYRIAM = pathlib.Path(r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\analysis\Myriam_Hamon\combined_results')
     sys.path.insert(0, r"M:\analysis\Axel_Bisi\NWB_reader")
@@ -73,7 +74,7 @@ def load_jaw_onset_data(nwb_files, experimenter='AB', max_workers=12):
                 data_path = ROOT_PATH_AXEL
             else:
                 return None, f"[WARN] Unknown experimenter: {experimenter} for {mouse_id}"
-
+            data_path = pathlib.Path(str(data_path).replace('_ks4', ''))
             file_path = os.path.join(data_path, mouse_id, 'dlc_jaw_onset_times.pkl')
             if not os.path.exists(file_path):
                 return None, f"[WARN] Jaw onset data not found for {mouse_id} ({file_path})"
@@ -277,48 +278,128 @@ def load_wf_analysis_data(nwb_files, experimenter): #TODO: make sure merge is po
     return data_table_wide
 
 
-def load_motion_dredge_shift_test_results(nwb_files, experimenter='AB'):
+def load_motion_dredge_shift_test_results(nwb_files, experimenter='AB', max_workers=8):
     """
-    Load the time-binned drift (motion) shift-test results
+    Load per-session time-binned drift (motion) shift-test results
     (single_neuron_shift_test_figs.py output) from per-session CSVs.
-    :param nwb_files: List of NWB file paths.
-    :param experimenter: 'AB' or 'MH', selects the results root.
-    :return: concatenated DataFrame, factor=='motion' & epoch=='baseline' rows only.
+
+    Sessions are loaded in parallel using ThreadPoolExecutor since this is
+    primarily an I/O-bound operation.
+
+    Parameters
+    ----------
+    nwb_files : list
+        List of NWB file paths.
+    experimenter : str, optional
+        'AB' or 'MH', selects the results root.
+    max_workers : int, optional
+        Maximum number of worker threads.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Concatenated motion-drift shift-test results from all successfully
+        loaded sessions.
     """
     print('Loading motion-drift (DREDge) shift test results ...')
-    data_list = []
-    for nwb_file in nwb_files:
-        mouse_id = nwb_reader.get_mouse_id(nwb_file)
-        beh, day = nwb_reader.get_bhv_type_and_training_day_index(nwb_file)
-        if experimenter == 'AB':
-            data_path = ROOT_PATH_AXEL
-        elif experimenter == 'MH':
-            data_path = ROOT_PATH_MYRIAM
-        else:
-            print(f"[WARN] Unknown experimenter '{experimenter}' for {nwb_file}. Skipping.")
-            continue
 
-        session_day = f"{beh}_{day}"
-        file_path = os.path.join(data_path, mouse_id, session_day, 'single_neuron_motion_shift_test',
-                                 f'{mouse_id}_{session_day}_motion_shift_test_results.csv')
-        if os.path.exists(file_path):
+    if experimenter == 'AB':
+        data_path = ROOT_PATH_AXEL
+    elif experimenter == 'MH':
+        data_path = ROOT_PATH_MYRIAM
+    else:
+        raise ValueError(
+            f"Unknown experimenter '{experimenter}'. Expected 'AB' or 'MH'."
+        )
+
+    def _load_one_session(nwb_file):
+        """Worker: resolve the session CSV path and load it."""
+
+        try:
+            mouse_id = nwb_reader.get_mouse_id(nwb_file)
+            beh, day = nwb_reader.get_bhv_type_and_training_day_index(nwb_file)
+
+            session_day = f"{beh}_{day}"
+
+            file_path = os.path.join(
+                data_path,
+                mouse_id,
+                session_day,
+                'single_neuron_motion_shift_test',
+                f'{mouse_id}_{session_day}_motion_shift_test_results.csv'
+            )
+
+            if not os.path.exists(file_path):
+                return {
+                    "status": "missing",
+                    "mouse_id": mouse_id,
+                    "session_id": session_day,
+                    "file_path": file_path,
+                }
+
             df = pd.read_csv(file_path)
-            data_list.append(df)
-        else:
-            print(f"[WARN] Motion-drift shift test file not found for {mouse_id} at {file_path}. Adding NaN row.")
-            #data_list.append(pd.DataFrame([{'mouse_id': mouse_id, 'session_id': session_day}]))
-            continue
 
+            return {
+                "status": "ok",
+                "mouse_id": mouse_id,
+                "session_id": session_day,
+                "file_path": file_path,
+                "data": df,
+            }
+
+        except Exception as e:
+            return {
+                "status": "failed",
+                "nwb_file": nwb_file,
+                "error": str(e),
+            }
+
+    data_list = []
+    missing = []
+    failed = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_load_one_session, nwb_file): nwb_file
+            for nwb_file in nwb_files
+        }
+
+        for future in as_completed(futures):
+            res = future.result()
+
+            if res["status"] == "ok":
+                data_list.append(res["data"])
+
+            elif res["status"] == "missing":
+                missing.append(res["file_path"])
+                print(
+                    f"[WARN] Motion-drift shift test file not found for "
+                    f"{res['mouse_id']} at {res['file_path']}. Skipping."
+                )
+
+            elif res["status"] == "failed":
+                failed.append((res["nwb_file"], res["error"]))
+                print(
+                    f"[FAILED] {res['nwb_file']}: {res['error']}"
+                )
+
+    print(
+        f"\nLoaded {len(data_list)}/{len(nwb_files)} sessions "
+        f"({len(missing)} missing, {len(failed)} failed)"
+    )
 
     if not data_list:
         print("[WARN] No motion-drift shift test files loaded.")
-        return pd.DataFrame(columns=['mouse_id', 'session_id', 'unit_id'])
+        return pd.DataFrame(
+            columns=['mouse_id', 'session_id', 'unit_id']
+        )
 
     data_table = pd.concat(data_list, ignore_index=True)
+
     return data_table
 
 
-def load_spontaneous_reward_lick_times(nwb_files, n_workers=8, load_summary=False):
+def load_spontaneous_reward_lick_times(nwb_files, max_workers=8, load_summary=False):
     """
     Load per-session spontaneous-lick CSVs for a list of NWB files, in
     parallel via ThreadPoolExecutor (I/O-bound: file existence checks + CSV
@@ -370,7 +451,7 @@ def load_spontaneous_reward_lick_times(nwb_files, n_workers=8, load_summary=Fals
         df = pd.read_csv(file_path)
     else:
 
-        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(_load_one_session_csv, f): f for f in nwb_files}
             for future in as_completed(futures):
                 res = future.result()

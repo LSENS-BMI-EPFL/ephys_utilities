@@ -224,7 +224,7 @@ def keep_passive_mice(data_df):
 
 
 
-def keep_shared_areas(data_df, nomenclature, n_min_units=10, n_min_mice=3):
+def keep_shared_areas(data_df, nomenclature, n_min_units=5, n_min_mice=3):
     print(f'Filtering for R+/R- shared areas in {nomenclature} with at least {n_min_units} units '
           f'and {n_min_mice} mice in each reward group...')
 
@@ -236,7 +236,7 @@ def keep_shared_areas(data_df, nomenclature, n_min_units=10, n_min_mice=3):
 
     # Count unique elements
     if n_min_units > 0 or n_min_mice > 0:
-        bc_mask = data_df['bc_label'].isin(['good', 'mua'])
+        bc_mask = data_df['quality_label'].isin(['good', 'mua'])
 
         # Count unique units per area and reward group
         n_units_rplus = (
