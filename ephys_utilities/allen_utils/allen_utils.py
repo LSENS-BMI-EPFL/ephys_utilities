@@ -317,11 +317,11 @@ def get_custom_area_order():
     area_order = ['MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2', 'mPFC', 'FRP', 'ACA', 'PL', 'ORB', 'AI',
                   'SSp-bfd', 'SSs', 'SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'VISC', 'GU',
                   'AUD', 'TEa', 'RSP', 'PPC', 'VIS', 'VISa', 'VISp', 'VISam', 'VISl', 'VISpm', 'VISrl', 'VISal',
-                  'CLA', 'EP', 'CTXsp',
-                  'CA1', 'CA2', 'CA3', 'DG', 'HPF',
+                  'CLA', 'EP', 'CTXsp'
+                  'CA1', 'CA2', 'CA3', 'DG', 'HPF', 'SUB', 'PROs',
                   'CP', 'DMS', 'DLS', 'TS', 'STR', 'ACB', 'VS', 'FS', 'LS', 'SF', 'GPe', 'GPi', 'PAL', 'MS',
                   'TH', 'VPL', 'VPM', 'VP', 'LD', 'RT', 'PO', 'LGN', 'LP', 'ATN', 'LAT', 'MGN', 'MED', 'MTN', 'ILM', 'HA', 'CL',
-                  'SCs', 'SCm', 'MB', 'VTA', 'MRN', 'PAG', 'RN', 'SNr', 'APN',
+                  'SCs', 'SCm', 'MB', 'VTA', 'MRN', 'PAG', 'RN', 'SNr', 'APN', 'OP'
                   'Pons', 'MY',
                   'AON', 'OLF', 'PIR',
                   'BLA', 'LA', 'CEA','HY', 'ZI']
@@ -334,15 +334,17 @@ def get_custom_area_groups():
 
     area_groups = {
         'Motor and frontal areas': ['MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2', 'mPFC', 'FRP', 'ACA', 'PL', 'ORB'],
-        'Somatosensory areas': ['SSp-bfd', 'SSs', 'SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'VISC', 'GU', 'AI'],
+        #'Somatosensory areas-orofacial': ['SSp-bfd', 'SSs', 'SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'VISC', 'GU', 'AI'],
+        'Somatosensory areas-orofacial': ['SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'VISC', 'GU', 'AI'],
+        'Somatosensory areas-whisker': ['SSp-bfd', 'SSs'],
         'Auditory areas': ['AUD', 'TEa'],
         'Retrosplenial areas': ['RSP'],
-        'Visual areas': ['PPC', 'VIS', 'VISa', 'VISp', 'VISam', 'VISl', 'VISpm', 'VISrl', 'VISal'],
-        #'Cortical subplate': ['CLA', 'EP'],
-        'Hippocampus': ['CA1', 'CA2', 'CA3', 'DG', 'HPF'],
+        'Posterior parietal areas': ['PPC', 'VIS', 'VISa', 'VISp', 'VISam', 'VISl', 'VISpm', 'VISrl', 'VISal'],
+        'Cortical subplate': ['CTXsp','CLA', 'EP'],
+        'Hippocampus': ['CA1', 'CA2', 'CA3', 'DG', 'HPF', 'SUB', 'ProS'],
         'Striatum and pallidum': ['CP', 'DMS', 'DLS', 'TS', 'STR', 'VS', 'ACB', 'FS', 'LS', 'SF', 'GPe', 'GPi', 'PAL', 'MS'],
         'Thalamus': ['TH', 'VPL', 'VPM', 'VP', 'LD', 'RT', 'PO', 'LGN', 'LP', 'ATN', 'LAT', 'MGN', 'MED', 'MTN', 'ILM', 'HA', 'CL'],
-        'Midbrain': ['SCs', 'SCm', 'MB', 'VTA', 'MRN', 'PAG', 'RN', 'SNr', 'APN'],
+        'Midbrain': ['SCs', 'SCm', 'MB', 'VTA', 'MRN', 'PAG', 'RN', 'SNr', 'APN', 'OP'],
         'Pons and medulla': ['Pons', 'MY'],
         'Olfactory areas': ['AON', 'OLF', 'PIR'],
         'Amygdala and hypothalamus': ['BLA', 'BLAa', 'LA', 'CEA', 'HY', 'ZI']
@@ -363,10 +365,13 @@ def get_custom_area_groups_colors():
     """Get custom area group colors for plotting, here Allen colors."""
     area_group_colors = {
         'Motor and frontal areas': '#1f9d5a',
-        'Somatosensory areas': '#188064',
+        #'Somatosensory areas': '#188064',
+        'Somatosensory areas-orofacial': '#188064',
+        'Somatosensory areas-whisker': '#188064',
         'Auditory areas': '#019399',
         'Retrosplenial areas': '#1aa698',
-        'Visual areas': '#1aa698',
+        #'Visual areas': '#1aa698',
+        'Posterior parietal areas': '#1aa698',
         'Cortical subplate': '#8ada87',
         'Hippocampus': '#7ed04b',
         'Striatum and pallidum': '#98d6f9',
@@ -780,6 +785,9 @@ def process_allen_labels(df, split_merge_areas=False):
     except KeyError as err:
         mouse_id = df['mouse_id'].unique()[0]
         print(f'Warning: issue with {mouse_id} CCF label processing: {err}')
+
+    # Remove unwanted areas
+    df = df[~df['ccf_atlas_acronym'].isin(get_excluded_areas())]
 
     # Create custom area acronyms simplifying ccf areas acronyms
     #temp: remove nan from required columns

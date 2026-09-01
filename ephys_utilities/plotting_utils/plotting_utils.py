@@ -17,6 +17,9 @@ import copy
 
 from ephys_utilities import allen_utils as allen
 
+
+GROUP_COLORS = {'rplus': '#00B400', 'rminus': '#C800C8'}
+
 TARGET_AREA_CUSTOM_CMAP = {
     'wS1': '#379443',
     'wS2': '#51db64',
@@ -690,7 +693,7 @@ def get_numbers_title(df, area):
 def get_default_trial_type_color_dict_palette():
     """Returns a dictionary with default trial type / reward_group colors."""
     default_palette = {
-            'whisker_trial': ['crimson', 'forestgreen'],
+            'whisker_trial': [GROUP_COLORS['rminus'], GROUP_COLORS['rplus']],
             'auditory_trial': [lighten_color('mediumblue', 0.7), 'mediumblue'],
             'no_stim_trial': [lighten_color('k', 0.7), 'k']
         }
@@ -727,7 +730,7 @@ def get_trial_type_color_palettes_from_hue(trial_type, hue):
 
     return palette_dict
 
-def switch_color_in_palette(palette, color_a='forestgreen', color_b='crimson'):
+def switch_color_in_palette(palette, color_a=GROUP_COLORS['rplus'], color_b=GROUP_COLORS['rminus']):
     """
     Replace all occurrences of color_a with color_b in the given palette.
     :param palette:

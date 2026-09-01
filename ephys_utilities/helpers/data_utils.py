@@ -19,7 +19,7 @@ sys.path.insert(0, r"M:\analysis\Axel_Bisi\NWB_reader")
 sys.path.insert(0, "/home/bisi/code/NWB_reader")
 import NWB_reader_functions as nwb_reader
 
-def process_single_nwb(nwb, day_to_analyze = 0):
+def process_single_nwb(nwb, day_to_analyze = 'learning'):
 
     try:
         beh_type, day = nwb_reader.get_bhv_type_and_training_day_index(nwb)
@@ -82,7 +82,7 @@ def process_single_nwb(nwb, day_to_analyze = 0):
 
 
 
-def combine_ephys_nwb(nwb_list, day_to_analyze=0, max_workers=24):
+def combine_ephys_nwb(nwb_list, day_to_analyze='learning', max_workers=24):
     """
     Combine neural and behavioural data from multiple NWB files using multiprocessing and tqdm.
     :param nwb_list: list of NWB file paths.
@@ -206,6 +206,13 @@ def keep_active_from_whisker_onset(trial_df):
 
 
 def keep_passive_mice(data_df):
+    print('Filtering for mice with valid video data...')
+    mice_no_video = ['AB080','AB082','AB085', 'AB155',
+                     'MH065']
+    data_df = data_df[~data_df['mouse_id'].isin(mice_no_video)]
+    return data_df
+
+def keep_passive_mice(data_df):
     print('Filtering for mice with passive pre/post data...')
     mouse_ids = data_df['mouse_id'].unique()
     passive_mouse_ids = []
@@ -218,7 +225,7 @@ def keep_passive_mice(data_df):
             except ValueError:
                 continue  # skip if name is wrong
         elif m.startswith('MH'):
-            if m not in ['MH013', 'MH062']:  # no passive post for MH013
+            if m not in ['MH013']:  # no passive post for MH013
                 passive_mouse_ids.append(m)
     return data_df[data_df['mouse_id'].isin(passive_mouse_ids)]
 

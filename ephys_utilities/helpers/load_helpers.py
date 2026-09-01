@@ -22,7 +22,7 @@ hostname = socket.gethostname()
 if 'haas' in hostname:
     MAX_WORKERS = 100
     ROOT_PATH_AXEL = pathlib.Path('/mnt/lsens-analysis/Axel_Bisi/combined_results_ks4')
-    ROOT_PATH_MYRIAM = pathlib.Path('/mnt/lsens-analysis/Myriam_Hamon/combined_results_ks4')
+    ROOT_PATH_MYRIAM = ROOT_PATH_AXEL
 
     sys.path.append("/home/bisi/code/NWB_reader")
     import NWB_reader_functions as nwb_reader
@@ -54,7 +54,7 @@ def load_learning_curves_data(path_to_data, subject_ids):
     return data_df
 
 
-def load_jaw_onset_data(nwb_files, experimenter='AB', max_workers=12):
+def load_jaw_onset_data(nwb_files, day_to_analyze, experimenter='AB', max_workers=12):
     """
     Load jaw onset data from NWB files in parallel.
     :param nwb_files: List of NWB file paths.
@@ -68,6 +68,14 @@ def load_jaw_onset_data(nwb_files, experimenter='AB', max_workers=12):
         """Load jaw onset file for a single NWB file."""
         try:
             mouse_id = nwb_reader.get_mouse_id(nwb_file)
+            beh_type, day = nwb_reader.get_bhv_type_and_training_day_index(nwb_file)
+            if day_to_analyze == 'learning' and day != 0:
+                return None
+            elif day_to_analyze == 'expert' and day == 0:
+                return None
+            elif day_to_analyze == 'all' and day < 0:
+                return None
+
             if mouse_id.startswith('AB'):
                 data_path = ROOT_PATH_AXEL
             elif mouse_id.startswith('MH'):
@@ -278,7 +286,7 @@ def load_wf_analysis_data(nwb_files, experimenter): #TODO: make sure merge is po
     return data_table_wide
 
 
-def load_motion_dredge_shift_test_results(nwb_files, experimenter='AB', max_workers=8):
+def load_motion_dredge_shift_test_results(nwb_files, day_to_analyze, experimenter='AB', max_workers=12):
     """
     Load per-session time-binned drift (motion) shift-test results
     (single_neuron_shift_test_figs.py output) from per-session CSVs.
@@ -318,6 +326,12 @@ def load_motion_dredge_shift_test_results(nwb_files, experimenter='AB', max_work
         try:
             mouse_id = nwb_reader.get_mouse_id(nwb_file)
             beh, day = nwb_reader.get_bhv_type_and_training_day_index(nwb_file)
+            if day_to_analyze == 'learning' and day != 0:
+                return None
+            elif day_to_analyze == 'expert' and day == 0:
+                return None
+            elif day_to_analyze == 'all' and day < 0:
+                return None
 
             session_day = f"{beh}_{day}"
 
@@ -399,7 +413,7 @@ def load_motion_dredge_shift_test_results(nwb_files, experimenter='AB', max_work
     return data_table
 
 
-def load_spontaneous_reward_lick_times(nwb_files, max_workers=8, load_summary=False):
+def load_spontaneous_reward_lick_times(nwb_files, day_to_analyze, max_workers=12, load_summary=False):
     """
     Load per-session spontaneous-lick CSVs for a list of NWB files, in
     parallel via ThreadPoolExecutor (I/O-bound: file existence checks + CSV
@@ -418,6 +432,12 @@ def load_spontaneous_reward_lick_times(nwb_files, max_workers=8, load_summary=Fa
         mouse_id = nwb_reader.get_mouse_id(nwb_file)
         session_id = nwb_reader.get_session_id(nwb_file)  # adjust if named differently
         beh, day = nwb_reader.get_bhv_type_and_training_day_index(nwb_file)
+        if day_to_analyze == 'learning' and day != 0:
+            return None
+        elif day_to_analyze == 'expert' and day == 0:
+            return None
+        elif day_to_analyze == 'all' and day < 0:
+            return None
 
         if 'whisker' not in beh:
             return {"status": "skipped", "mouse_id": mouse_id, "session_id": session_id}

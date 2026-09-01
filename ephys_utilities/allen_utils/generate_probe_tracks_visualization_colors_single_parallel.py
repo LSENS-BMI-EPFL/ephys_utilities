@@ -30,6 +30,9 @@ brainrender.settings.ROOT_COLOR = [0.99, 0.99, 0.99]
 brainrender.settings.SHADER_STYLE = 'cartoon'
 brainrender.settings.LW = 0.1
 
+
+GROUP_COLORS = {'rplus': '#00B400', 'rminus': '#C800C8'}
+
 TARGET_AREA_CUSTOM_CMAP = {
     'wS1': '#379443',
     'wS2': '#51db64',
@@ -362,7 +365,7 @@ def generate_brain_visualization(params):
 
         if color_by == 'reward_group':
             rg = mouse_probes['reward_group'].values[0]
-            probe_color = 'forestgreen' if rg == 'R+' else 'blueviolet'
+            probe_color = GROUP_COLORS['rplus'] if rg == 'R+' else GROUP_COLORS['rminus']
 
         for date_val, date_probes in mouse_probes.groupby('date'):
 
@@ -534,7 +537,7 @@ def _process_single_mouse_sessions(params: dict, m_name: str, mouse_probes: pd.D
     probe_color = base_probe_color
     if color_by == 'reward_group':
         rg = mouse_probes['reward_group'].values[0]
-        probe_color = 'forestgreen' if rg == 'R+' else 'blueviolet'
+        probe_color = GROUP_COLORS['rplus'] if rg == 'R+' else GROUP_COLORS['rminus']
 
     n_figures = 0
     for date_val, date_probes in mouse_probes.groupby('date'):
@@ -551,7 +554,7 @@ def _process_single_mouse_sessions(params: dict, m_name: str, mouse_probes: pd.D
         if not data_folder.exists() or not any(data_folder.iterdir()):
             log.warning("  Track folder missing/empty: %s — skipping session.", data_folder)
             continue
-
+        print('')
         probe_arrays = sorted(f for f in os.listdir(data_folder) if f.endswith('.npy') and f.startswith('imec'))
         probe_tables = sorted(f for f in os.listdir(data_folder) if f.endswith('.csv') and f.startswith('imec'))
         get_probe_id = lambda fname: fname.split('_')[0][-1]  # e.g. "imec0_mapped.npy" → "0"
@@ -746,11 +749,12 @@ params = {
 
 if __name__ == "__main__":
     mode     = 'combined'  # 'combined' (one figure across all mice/sessions) or 'per_session'
-    parallel = True        # run jobs across multiple worker processes
-    max_workers = 30     # None = cpu_count() - 1; lower this if you hit GPU/memory issues
+    parallel = False        # run jobs across multiple worker processes
+    max_workers = 5     # None = cpu_count() - 1; lower this if you hit GPU/memory issues
 
     if mode == 'combined':
         color_by_sweep = ['area_acronym_custom', 'reward_group', 'target_area', 'none']
+        color_by_sweep = ['reward_group']
         camera_views   = ['sagittal', 'top', 'angled', 'frontal']
         file_formats   = ['png', 'svg', 'pdf']
 
@@ -768,9 +772,9 @@ if __name__ == "__main__":
     else:
         # Single direct call: one figure per mouse/session, uncolored ('none'),
         # restricted to whichever mice are listed in params['mouse_ids'].
-        params['color_by']    = 'none'
+        params['color_by']    = 'area_acronym_custom'
         params['camera_view'] = 'top'
         params['file_format'] = 'png'
-        params['mouse_ids']   = ['MH001']  # <-- set the mice to render here
+        params['mouse_ids']   = ['MH021']  # <-- set the mice to render here
         params['analyzer']    = 'Axel_Bisi'         # <-- ALL figures save under analysis/Axel_Bisi/data/..., regardless of mouse
         generate_per_session_visualizations(params, parallel=parallel, max_workers=max_workers)
