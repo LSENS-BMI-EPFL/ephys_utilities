@@ -245,7 +245,7 @@ def keep_shared_areas(data_df, nomenclature, n_min_units=5, n_min_mice=3):
     if n_min_units > 0 or n_min_mice > 0:
         bc_mask = data_df['quality_label'].isin(['good', 'mua'])
 
-        # Count unique units per area and reward group
+        # Count unique units per area and reward group, across all mice
         n_units_rplus = (
             data_df[(data_df['reward_group'] == 1) & bc_mask]
             .groupby(nomenclature)['unit_id']
@@ -296,6 +296,10 @@ def keep_shared_areas(data_df, nomenclature, n_min_units=5, n_min_mice=3):
     print(f'Keeping {len(shared_areas)} shared areas meeting both unit and subject thresholds.')
     if len(shared_areas) > 0:
         print("Shared areas:", shared_areas)
+        for area in shared_areas:
+            print(f"  {area}: "
+                  f"R+ {n_units_rplus.get(area, 0)}u/{n_mice_rplus.get(area, 0)}m, "
+                  f"R- {n_units_rminus.get(area, 0)}u/{n_mice_rminus.get(area, 0)}m")
 
     # Filter dataset
     data_df = data_df[data_df[nomenclature].isin(shared_areas)]

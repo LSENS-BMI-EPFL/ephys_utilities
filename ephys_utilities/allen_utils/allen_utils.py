@@ -74,8 +74,8 @@ def get_excluded_areas():
                       'VL', 'I', 'VS'
                       'nan',
                       ]
-    ignored_areas = ['ND', 'VISC', 'SPP-ll', 'GU', 'HA', 'HY', 'MA', 'NOT', 'P'] #areas to ignore because too few neurons
-    return excluded_areas + ignored_areas
+    #ignored_areas = ['ND', 'VISC', 'SPp-ll', 'GU', 'HA', 'HY', 'MA', 'NOT', 'P'] #areas to ignore because too few neurons
+    return excluded_areas
 
 
 
@@ -101,6 +101,7 @@ def generalize_region(region):
         "AUD": "AUD",
         "AV":"ATN",
         "BLAp":"BLA",
+        "BLAv":"BLA",
         "BLAa":"BLA",
         "BST":"PAL",
         "CEA": "CEA",
@@ -126,7 +127,7 @@ def generalize_region(region):
         "LT": "MB",
         "MD":"MED",
         "MH":"HA",
-        "MS":"PAL",
+        "MS":"MSC",
         "MGm":"MGN",
         "MGv":"MGN",
         "MGd":"MGN",
@@ -142,7 +143,7 @@ def generalize_region(region):
         "PIL":"ILM", # confirm, also, use DORpm vs DORsm ? PIL-PP in lit.
         "PIR":"OLF",
         "POL":"LAT",
-        "POST":"HPF",
+        "POST":"SUB",
         "PoT":"VP",
         "PO":"VP",
         "PP":"ILM",# PIL-PP in lit., ILMN: intralaminar nuclei
@@ -191,11 +192,11 @@ def generalize_region(region):
     if region.startswith("SSp-bfd"):
         return "SSp-bfd"
 
-    if region.startswith("VIS"):
-        if region=='VISC':
-            return 'VISC'
-        else:
-            return 'VIS'
+    #if region.startswith("VIS"):
+    #    if region=='VISC':
+    #        return 'VISC'
+    #    else:
+    #        return 'VIS'
 
     return region  # Default: no change
 
@@ -204,13 +205,94 @@ def handle_ssp_bfd(region):
     """Special case: handle SSp-bfd barrels (e.g., "SSp-bfd-C4"/"SSp-bfd-Gamma" -> "SSp-bfd")."""
     return re.sub(r'SSp-bfd-[A-Za-z0-9]+', 'SSp-bfd', region) if "SSp-bfd" in region else region
 
+def handle_ssp_whisker(region, row=None):
+    """Special case: unify somatosensory orofacial-related subregions to 'SSp-oro'."""
+    ssp_orofacial = ['SSp-bfd', 'SSs'] #more evidence that SSp-unassigned is closer to orofacial (bfd) than body based on connectivity studies
+    if region in ssp_orofacial and row['target_region'] in ['wS1', 'wS2']:
+        return 'SSp-w'
+    else:
+        return region
+
+def handle_ssp_oro(region, row=None):
+    """Special case: unify somatosensory orofacial-related subregions to 'SSp-oro'."""
+    ssp_orofacial = ['SSp-m', 'SSp-n', 'SSp-un'] #more evidence that SSp-unassigned is closer to orofacial (bfd) than body based on connectivity studies
+    if region in ssp_orofacial:
+        return 'SSp-oro'
+    else:
+        return region
+
+def handle_ssp_body(region, row=None):
+    """Special case: unify somatosensory body-related subregions to 'SSp-body'."""
+    ssp_body = ['SSp-ul', 'SSp-ll', 'SSp-tr']
+    if region in ssp_body:
+        return 'SSp-body'
+    else:
+        return region
+
+def handle_mpfc(region, row=None):
+    """Special case: unify medial PFC subregions to 'mPFC'."""
+    mpfc_areas = {"PL", "ILA", "IL", "ACA", "ACAd", "ACAv"}
+    if region in mpfc_areas:
+        return 'mPFC'
+    else:
+        return region
+
 def handle_ppc(region, row=None):
     """Special case: unify PPC subregions to 'PPC'."""
-    pcc_areas = ['VIS', 'VISa', 'VISam', 'VISl', 'VISpm', 'VISrl', 'VISal', 'SSp-tr', 'SSp-un', 'SSp-bfd']
-    if row['ccf_atlas_parent_acronym'] in pcc_areas and row['target_region']=='PPC':
+    pcc_areas = ['PTLp', 'VISa', 'VISrl', 'SSp-tr', 'SSp-un', 'SSp-bfd']
+    if region in pcc_areas and row['target_region']=='PPC':
         return 'PPC'
     else:
         return region
+
+def handle_v1(region, row=None):
+    """Special case: unify PPC subregions to 'PPC'."""
+    v1_areas = ['VIS', 'VISp', 'VISal', 'VISl', 'VISpm', 'VISam', 'VISpl', 'VISli', 'VISpor', 'VISrl']
+    if region in v1_areas:
+        return 'V1'
+    else:
+        return region
+
+def handle_lsf(region, row=None):
+    """Special case: unify LS and SF subregions to 'LSX'."""
+    lat_septal_complex = ['SF', 'LS', 'SH']
+    if region in lat_septal_complex:
+        return 'LSX'
+    else:
+        return region
+
+def handle_cortical_subplate(region, row=None):
+    """Special case: unify LS and SF subregions to 'LSX'."""
+    ctx_suplate = ['CLA', 'EP', 'LA', 'BLA', 'BMA', 'PA']
+    if region in ctx_suplate:
+        return 'CTXsp'
+    else:
+        return region
+
+def handle_hypothalamus(region, row=None):
+    """Special case: handle hypothalamic areas."""
+    hypo_areas = ['ZI']
+    if region in hypo_areas:
+        return 'HY'
+    else:
+        return region
+
+
+def apply_context_handlers(region, row):
+    """
+    Apply row-context-dependent overrides on top of the lexical `region` label
+    produced by simplify_area(). Order matters: broader regroupings first,
+    the most specific (target_region-gated) override last so it wins.
+    """
+    region = handle_ssp_oro(region, row)
+    region = handle_ssp_body(region, row)
+    region = handle_lsf(region, row)
+    region = handle_hypothalamus(region, row)
+    region = handle_mpfc(region, row)
+    region = handle_ppc(region, row)
+    region = handle_v1(region, row)
+    region = handle_cortical_subplate(region, row)
+    return region
 
 
 def simplify_area(ccf_acronym, ccf_parent_acronym):
@@ -239,8 +321,7 @@ def create_area_custom_column(df):
         else:
             region = simplify_area(row['ccf_acronym'], row.get('ccf_parent_acronym', None))
 
-        # Apply PPC unification (row context available here)
-        return region
+        return apply_context_handlers(region, row)
 
     df['area_acronym_custom'] = df.apply(simplify_per_nomenclature, axis=1)
     return df
@@ -310,18 +391,19 @@ def get_target_region_order():
     """
     return ['wS1', 'wS2', 'A1', 'PPC', 'DLS', 'wM1', 'wM2', 'tjM1', 'ALM', 'OFC', 'SC']
 
-def get_custom_area_order():
+def get_area_acronym_custom_order():
     """
     Get the order of brain areas for plotting.
     """
     area_order = ['MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2', 'mPFC', 'FRP', 'ACA', 'PL', 'ORB', 'AI',
-                  'SSp-bfd', 'SSs', 'SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'VISC', 'GU',
-                  'AUD', 'TEa', 'RSP', 'PPC', 'VIS', 'VISa', 'VISp', 'VISam', 'VISl', 'VISpm', 'VISrl', 'VISal',
-                  'CLA', 'EP', 'CTXsp'
+                  'SSp-bfd', 'SSs', 'SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'VISC', 'GU', 'SSp-oro', 'SSp-body',
+                  'AUD', 'TEa', 'PPC', 'V1', 'VIS', 'VISa', 'VISp', 'VISam', 'VISl', 'VISpm', 'VISrl', 'VISal',
+                  'CLA', 'EP', 'CTXsp',
                   'CA1', 'CA2', 'CA3', 'DG', 'HPF', 'SUB', 'PROs',
-                  'CP', 'DMS', 'DLS', 'TS', 'STR', 'ACB', 'VS', 'FS', 'LS', 'SF', 'GPe', 'GPi', 'PAL', 'MS',
-                  'TH', 'VPL', 'VPM', 'VP', 'LD', 'RT', 'PO', 'LGN', 'LP', 'ATN', 'LAT', 'MGN', 'MED', 'MTN', 'ILM', 'HA', 'CL',
-                  'SCs', 'SCm', 'MB', 'VTA', 'MRN', 'PAG', 'RN', 'SNr', 'APN', 'OP'
+                  'CP', 'DMS', 'DLS', 'TS', 'STR', 'ACB', 'VS', 'FS', 'LS', 'SF', 'GPe', 'GPi', 'PAL', 'MS', 'LSX',
+                  'VT', 'TH', 'VPL', 'VPM', 'VP', 'LD', 'RT', 'PO', 'LGN', 'LP', 'ATN', 'LAT', 'MGN', 'MED', 'MTN', 'ILM', 'HA', 'CL', 'ILN',
+                  'RSP',
+                  'SCs', 'SCm', 'MB', 'VTA', 'MRN', 'PAG', 'RN', 'SNr', 'APN', 'OP',
                   'Pons', 'MY',
                   'AON', 'OLF', 'PIR',
                   'BLA', 'LA', 'CEA','HY', 'ZI']
@@ -333,23 +415,33 @@ def get_custom_area_groups():
     """
 
     area_groups = {
-        'Motor and frontal areas': ['MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2', 'mPFC', 'FRP', 'ACA', 'PL', 'ORB'],
-        #'Somatosensory areas-orofacial': ['SSp-bfd', 'SSs', 'SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'VISC', 'GU', 'AI'],
-        'Somatosensory areas-orofacial': ['SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'VISC', 'GU', 'AI'],
-        'Somatosensory areas-whisker': ['SSp-bfd', 'SSs'],
+        #'Motor and frontal areas': ['MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2', 'mPFC', 'FRP', 'ACA', 'PL', 'ORB'],
+        'Motor areas': ['MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2'],
+        'Frontal areas': ['mPFC', 'FRP', 'ACA', 'PL', 'ORB'],
+        #'Somatosensory areas': ['SSp-bfd', 'SSs', 'SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'VISC', 'GU', 'AI'],
+        'Somatosensory-orofacial': ['SSp-m', 'SSp-n', 'SSp-un', 'SSp-oro'],
+        'Somatosensory-body': ['SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-body'],
+        'Somatosensory-whisker': ['SSp-bfd', 'SSs'],
         'Auditory areas': ['AUD', 'TEa'],
         'Retrosplenial areas': ['RSP'],
-        'Posterior parietal areas': ['PPC', 'VIS', 'VISa', 'VISp', 'VISam', 'VISl', 'VISpm', 'VISrl', 'VISal'],
-        'Cortical subplate': ['CTXsp','CLA', 'EP'],
-        'Hippocampus': ['CA1', 'CA2', 'CA3', 'DG', 'HPF', 'SUB', 'ProS'],
-        'Striatum and pallidum': ['CP', 'DMS', 'DLS', 'TS', 'STR', 'VS', 'ACB', 'FS', 'LS', 'SF', 'GPe', 'GPi', 'PAL', 'MS'],
-        'Thalamus': ['TH', 'VPL', 'VPM', 'VP', 'LD', 'RT', 'PO', 'LGN', 'LP', 'ATN', 'LAT', 'MGN', 'MED', 'MTN', 'ILM', 'HA', 'CL'],
-        'Midbrain': ['SCs', 'SCm', 'MB', 'VTA', 'MRN', 'PAG', 'RN', 'SNr', 'APN', 'OP'],
-        'Pons and medulla': ['Pons', 'MY'],
+        'Posterior parietal areas': ['PPC', 'PTLp', 'VISa', 'VISrl', 'SSp-tr'],
+        'Visual areas': ['V1', 'VIS', 'VISp', 'VISal', 'VISl', 'VISpm', 'VISam', 'VISpl', 'VISli', 'VISpor'],
+        'Insular areas': ['AI','GU','VISC'],
+        'Hippocampus': ['CA1', 'CA2', 'CA3', 'DG', 'HPF', 'SUB', 'ProS', 'POST', 'IG'],
+        'Cortical subplate': ['CTXsp','CLA', 'EP', 'LA', 'BLA', 'BMA', 'PA'],
+        'Striatum': ['CP', 'DMS', 'DLS', 'TS', 'STR', 'VS', 'ACB', 'FS'],
+        'Pallidum': ['GPe', 'GPi', 'PAL', 'MS', 'MSC', 'MA'],
+        'Lateral septal complex': ['LS', 'SF', 'LSX', 'SH'], # striatum by development but not at all functionally
+        'Thalamus': ['TH', 'VPL', 'VPM', 'VP', 'VT', 'LD', 'RT', 'PO', 'PT', 'LGN', 'LP', 'ATN', 'LAT', 'MGN', 'MED', 'MTN', 'MT', 'ILM', 'HA', 'CL', 'ILN', 'IAD'],
+        'Midbrain': ['SCs', 'SCm', 'MB', 'VTA', 'MRN', 'PAG', 'RN', 'SNr', 'APN', 'OP', 'NOT', 'ND'],
+        'Pons and medulla': ['Pons', 'MY', 'P'],
         'Olfactory areas': ['AON', 'OLF', 'PIR'],
-        'Amygdala and hypothalamus': ['BLA', 'BLAa', 'LA', 'CEA', 'HY', 'ZI']
+        'Amygdala and hypothalamus': ['CEA','MEA', 'HY', 'ZI', 'PMd', 'Mmd']
     }
     return area_groups
+
+def get_area_group_custom_order():
+    return get_custom_area_groups().keys()
 
 def get_custom_area_groups_from_name():
     """
@@ -365,22 +457,27 @@ def get_custom_area_groups_colors():
     """Get custom area group colors for plotting, here Allen colors."""
     area_group_colors = {
         'Motor and frontal areas': '#1f9d5a',
-        #'Somatosensory areas': '#188064',
-        'Somatosensory areas-orofacial': '#188064',
-        'Somatosensory areas-whisker': '#188064',
-        'Auditory areas': '#019399',
+        'Motor areas': '#1f9d5a',
+        'Frontal areas': '#4f07b3',
+        'Somatosensory areas': '#188064',
+        'Somatosensory-orofacial': '#188064',
+        'Somatosensory-body': '#188044',
+        'Somatosensory-whisker': '#e3a514',
+        'Auditory areas': '#2c2cdb',
         'Retrosplenial areas': '#1aa698',
-        #'Visual areas': '#1aa698',
-        'Posterior parietal areas': '#1aa698',
-        'Cortical subplate': '#8ada87',
+        'Posterior parietal areas': '#009fac',
+        'Visual areas': '#08858c',
+        'Insular areas':'#219866',
         'Hippocampus': '#7ed04b',
-        'Striatum and pallidum': '#98d6f9',
-        'Thalamus': '#ff7080',
-        'Midbrain': '#ff64ff',
-        'Pons and medulla': '#ffc395',
-        'Olfactory areas': '#9ad2bd',
-        'Amygdala and hypothalamus': '#f2483b'
-
+        'Cortical subplate': '#69b366',
+        'Striatum': '#63baeb',
+        'Pallidum': '#7a94d6',
+        'Lateral septal complex': '#5ebff7',
+        'Thalamus': '#f0485b',
+        'Midbrain': '#d647d6',
+        'Pons and medulla': '#fcae72',
+        'Olfactory areas': '#7bc9ac',
+        'Amygdala and hypothalamus': '#c23227'
     }
     return area_group_colors
 
@@ -461,7 +558,7 @@ def get_isocortex_mapping():
             'SCs', 'SCm', 'MB', 'VTA', 'MRN', 'PAG', 'RN', 'SNr', 'APN',
             'Pons', 'MY',
             'AON', 'OLF', 'PIR',
-            'BLA', 'BLAa', 'LA', 'CEA', 'HY', 'ZI'
+            'BLA', 'BLAa', 'LA', 'CEA', 'MEA', 'HY', 'ZI'
         ]
     }
     return isocortex_groups
@@ -489,7 +586,8 @@ def apply_target_region_filters(peth_table, area):
         'SC': ['SC', 'SCs', 'SCiw', 'SCop', 'SCm', 'SCzo', 'SCsg'],
         'OFC': ['ORB', 'ORBm', 'ORBl', 'ORBvl'],
         'ALM': ['MOp', 'MOs', 'MOS-a', 'MOs-m', 'MOs-p'],
-        'PPC': ['VIS', 'VISa', 'VISam', 'VISl', 'VISpm', 'VISrl', 'VISal', 'SSp-tr', 'SSp-un', 'SSp-bfd'],
+        'PPC': ['VIS', 'VISa', 'VISrl', 'SSp-tr', 'SSp-un', 'SSp-bfd'],
+        'V1': ['VIS', 'VISp', 'VISl', 'VISpm', 'VISpl', 'VISli', 'VISpor'],
     }
 
     if area in specific_filters.keys():
@@ -729,13 +827,13 @@ def create_thalamic_groupings(df, verbose=False):
     if verbose:
         print('Creating thalamic groupings...')
 
-    anterior          = {"AD", "AV", "AM", "IAD", "IAM", "LD"}
-    medial            = {"MD", "MDc", "MDl", "MDm", "IMD", "SMT", "PR"}
-    midline_intralaminar = {"PVT", "PT", "Re", "Rh", "Xi", "CM", "CL", "PC", "Pf", "PIL", "ILM", "IntG"}
-    ventral           = {"VPM", "VPL", "VPMpc", "VPLpc", "VAL", "VM", "PoT"}
+    anterior          = {"AD", "AV", "AM", "IAD", "IAM", "LD", "ATN"}
+    medial            = {"MD", "MDc", "MDl", "MDm", "IMD", "SMT", "PR", "MT"}
+    midline_intralaminar = {"PVT", "PT", "Re", "Rh", "Xi", "CM", "CL", "PC", "Pf", "PIL", "ILM", "IntG", "ILN"}
+    ventral           = {"VPM", "VPL", "VPMpc", "VPLpc", "VAL", "VM", "PoT", "VP", "VT"}
     posterior_lp      = {"PO", "LP", "SPA", "PP", "SGN", "Eth", "SubG"}
-    visual_lgn        = {"LGd", "LGd-co", "LGd-ip", "LGd-sh", "LGv", "IGL", "OPT"}
-    auditory_mgn      = {"MGv", "MGd", "MGm", "SG", "LT", "MG"}
+    visual_lgn        = {"LGd", "LGd-co", "LGd-ip", "LGd-sh", "LGv", "IGL", "OPT", "LGN"}
+    auditory_mgn      = {"MGv", "MGd", "MGm", "MG", "MGN"}
     reticular         = {"RT"}
 
     def classify(acronym):
@@ -780,13 +878,6 @@ def process_allen_labels(df, split_merge_areas=False):
         raise ValueError(text)
 
     # Remove unwanted areas
-    try:
-        df = df[~df['ccf_atlas_acronym'].isin(get_excluded_areas())]
-    except KeyError as err:
-        mouse_id = df['mouse_id'].unique()[0]
-        print(f'Warning: issue with {mouse_id} CCF label processing: {err}')
-
-    # Remove unwanted areas
     df = df[~df['ccf_atlas_acronym'].isin(get_excluded_areas())]
 
     # Create custom area acronyms simplifying ccf areas acronyms
@@ -811,17 +902,22 @@ def process_allen_labels(df, split_merge_areas=False):
     # Create areas subdivisions for specific areas using custom boundaries
     if split_merge_areas:
         df = create_areas_subdivisions(df, verbose=False)
-        df = create_area_groupings(df, verbose=False)
+        #df = create_area_groupings(df, verbose=False)
         df = create_thalamic_groupings(df, verbose=False)
 
     # Add higher-level area groups
     area2group = ({a: g for g, areas in get_custom_area_groups().items() for a in areas})
     df['area_group'] = df['area_acronym_custom'].map(area2group).fillna('Other')
+    other_counts = df.loc[df['area_group'] == 'Other', 'area_acronym_custom'].value_counts()
+    if len(other_counts):
+        print(f"Warning: {len(other_counts)} area(s) mapped to 'Other' (not in get_custom_area_groups()):")
+        for area, n in other_counts.items():
+            print(f"  {area}: {n} units")
 
     # Add isocortex / rest
     existing_areas = df['area_acronym_custom'].unique()
     # get areas not present in
-    missing_areas = [a for a in existing_areas if a not in get_custom_area_order()]
+    missing_areas = [a for a in existing_areas if a not in get_area_acronym_custom_order()]
     isocortex2group = {area: group for group, areas in get_isocortex_mapping().items() for area in areas}
     df['isocortex_group'] = df['area_acronym_custom'].map(isocortex2group).fillna('Other')
 
@@ -858,12 +954,12 @@ def keep_shared_areas(data_df, nomenclature, n_min_units=10, n_min_mice=3):
         .unstack(fill_value=0)
     )
 
-    # Count units ONLY if bc_label exists i.e. unit-level data present
-    use_unit_threshold = 'bc_label' in data_df.columns
+    # Count units ONLY if quality_label exists i.e. unit-level data present
+    use_unit_threshold = 'quality_label' in data_df.columns
 
     if use_unit_threshold:
-        print("Using unit counts (filtered by bc_label).")
-        df_units = data_df[data_df['bc_label'].isin(['good', 'mua'])]
+        print("Using unit counts (filtered by quality_label).")
+        df_units = data_df[data_df['quality_label'].isin(['good', 'mua'])]
 
         n_units = (
             df_units
@@ -872,7 +968,7 @@ def keep_shared_areas(data_df, nomenclature, n_min_units=10, n_min_mice=3):
             .unstack(fill_value=0)
         )
     else:
-        print("No 'bc_label' column found — skipping unit threshold.")
+        print("No 'quality_label' column found — skipping unit threshold.")
         n_units = None  # not used
 
     # Apply thresholds
@@ -885,7 +981,7 @@ def keep_shared_areas(data_df, nomenclature, n_min_units=10, n_min_mice=3):
         mice_rminus = n_mice.get(area, {}).get(0, 0) if area in n_mice.columns else 0
         mice_ok = (mice_rplus >= n_min_mice) and (mice_rminus >= n_min_mice)
 
-        # ---- Unit condition (only if bc_label exists)
+        # ---- Unit condition (only if quality_label exists)
         if use_unit_threshold and n_min_units > 0:
             units_rplus = n_units.get(area, {}).get(1, 0) if area in n_units.columns else 0
             units_rminus = n_units.get(area, {}).get(0, 0) if area in n_units.columns else 0
@@ -905,6 +1001,14 @@ def keep_shared_areas(data_df, nomenclature, n_min_units=10, n_min_mice=3):
 
     return data_df, shared_areas
 
+
+
+def simplify_area_no_layer(ccf_acronym, ccf_parent_acronym):
+    """Layer-collapse only — matches create_ccf_acronym_no_layer_column's logic.
+    Use this to build MERGE_KEY for external area-lookup tables (Harris, Gao, Liu),
+    since it stays in the same raw nomenclature as unit_table's MERGE_KEY."""
+    base = ccf_parent_acronym if contains_layer(ccf_acronym) else ccf_acronym
+    return handle_ssp_bfd(base)
 
 def merge_liu_avg_ipsi_opt(df, cols_priority=None):
     """
@@ -1000,8 +1104,12 @@ def load_process_hierarchy_from_harris():
 
     # create_area_custom_column is assumed to strip layer suffixes (e.g. "VISp2/3" -> "VISp")
     # and return this in 'area_acronym_custom'
-    hierarchy_df = create_area_custom_column(hierarchy_df)
-    hierarchy_df[MERGE_KEY] = hierarchy_df['area_acronym_custom']
+    #hierarchy_df = create_area_custom_column(hierarchy_df)
+    hierarchy_df[MERGE_KEY] = hierarchy_df.apply(
+        lambda row: simplify_area_no_layer(row['ccf_acronym'], row.get('ccf_parent_acronym', row['ccf_acronym'])),
+        axis=1
+    )
+    #hierarchy_df[MERGE_KEY] = hierarchy_df['area_acronym_custom']
 
     hierarchy_df = _dedupe_on_key(hierarchy_df, ['cc_tc_ct_iterated'], 'Harris hierarchy')
     return hierarchy_df

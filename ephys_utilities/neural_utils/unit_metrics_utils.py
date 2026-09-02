@@ -282,7 +282,6 @@ ROUTE_THRESHOLDS = {
 JOINT_METRICS = ("drift_abs_r", "drift_shift_test_pval")
 
 
-
 def _metric_ok(vals, lo, hi):
     """NaN -> ignored (True); else in-range check against (lo, hi), inf-padded."""
     lo = -np.inf if lo is None else lo
@@ -309,7 +308,7 @@ def classify_units_quality(unit_table: pd.DataFrame,
     """
     thresholds = thresholds or DEFAULT_METRIC_THRESHOLDS
     exclude = set(exclude or [])
-    nonsoma_mask = unit_table["bc_label"].eq("non-soma")
+    nonsoma_mask = unit_table["bc_label"].eq("non-soma") # this must stay bc_label has bombcell determins non-soma
     out = unit_table.copy()
     n = len(unit_table)
     pass_mask = np.ones(n, dtype=bool)
