@@ -30,6 +30,53 @@ TRIAL_MAP = {
 }
 
 
+def correct_neuron_spike_train(spike_times, whisker_onset_times, rng=None):
+    """
+    Apply the whisker stimulus-onset artifact correction directly to a
+    neuron's full, session-wide raw spike train, once, for EVERY whisker
+    stimulus onset in the session — regardless of which trial-type
+    categorization (hit, miss, lick_trial, no_lick_trial, choice, passive,
+    ...) later references that time. For each onset, spikes in
+    WHISKER_ARTIFACT_WINDOW are replaced by a Poisson spike train whose
+    rate is estimated from that same onset's raw spike times in
+    WHISKER_ARTIFACT_BASELINE_WINDOW. Returns a corrected, sorted
+    spike_times array covering the whole session.
+    """
+
+    WHISKER_ARTIFACT_WINDOW = (-0.010, 0.005)
+    WHISKER_ARTIFACT_BASELINE_WINDOW = (-0.200, -0.010)
+    if rng is None:
+        rng = np.random.default_rng()
+    spike_times = np.asarray(spike_times)
+    if len(whisker_onset_times) == 0 or len(spike_times) == 0:
+        return spike_times
+
+    art_start, art_end = WHISKER_ARTIFACT_WINDOW
+    bl_start, bl_end = WHISKER_ARTIFACT_BASELINE_WINDOW
+    art_duration = art_end - art_start
+    bl_duration = bl_end - bl_start
+
+    remove_mask = np.zeros(len(spike_times), dtype=bool)
+    synthetic_spikes = []
+
+    for t in whisker_onset_times:
+        bl_lo = np.searchsorted(spike_times, t + bl_start, side='left')
+        bl_hi = np.searchsorted(spike_times, t + bl_end, side='left')
+        rate = (bl_hi - bl_lo) / bl_duration
+
+        art_lo = np.searchsorted(spike_times, t + art_start, side='left')
+        art_hi = np.searchsorted(spike_times, t + art_end, side='left')
+        remove_mask[art_lo:art_hi] = True
+
+        n_synthetic = rng.poisson(rate * art_duration)
+        if n_synthetic > 0:
+            synthetic_spikes.append(rng.uniform(t + art_start, t + art_end, size=n_synthetic))
+
+    kept = spike_times[~remove_mask]
+    corrected = np.concatenate([kept] + synthetic_spikes) if synthetic_spikes else kept
+    return np.sort(corrected)
+
+
 def compute_fano_factor_from_spike_train(spike_times, event_times, bin_size, time_start, time_stop):
     """
     Computes Fano factor for a single unit over trials.

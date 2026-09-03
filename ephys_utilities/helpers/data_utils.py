@@ -14,12 +14,14 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 
+from ephys_utilities.neural_utils import neural_utils
+
 # Custom imports
 sys.path.insert(0, r"M:\analysis\Axel_Bisi\NWB_reader")
 sys.path.insert(0, "/home/bisi/code/NWB_reader")
 import NWB_reader_functions as nwb_reader
 
-def process_single_nwb(nwb, day_to_analyze = 'learning'):
+def process_single_nwb(nwb, day_to_analyze = 'learning', apply_artifact_correction=True):
 
     try:
         beh_type, day = nwb_reader.get_bhv_type_and_training_day_index(nwb)
@@ -66,9 +68,19 @@ def process_single_nwb(nwb, day_to_analyze = 'learning'):
         unit_table['day'] = day
         unit_table['behaviour'] = beh_type
 
-        #print('Warning: number of root neurons :', mouse_id, len(unit_table[unit_table.ccf_acronym=='root']))
 
         unit_table = convert_electrode_group_object_to_columns(unit_table)
+
+        # Coil/magnetic artifact on whisker trials
+        if apply_artifact_correction:
+            # All whisker trials, any context, hit or miss — not filtered by
+            # what a particular downstream analysis will later select.
+            whisker_onset_times = trial_table[trial_table['whisker_stim'] == 1]['start_time'].values
+            rng = np.random.default_rng()
+            units = unit_table.copy()
+            units['spike_times'] = units['spike_times'].apply(
+                lambda st: neural_utils.correct_neuron_spike_train(st, whisker_onset_times, rng)
+            )
 
         return {
             'nwb': nwb,
