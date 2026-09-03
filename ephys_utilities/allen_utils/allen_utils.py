@@ -189,8 +189,8 @@ def generalize_region(region):
     if region.startswith("SC"):
         return "SCm" if region in ["SCdg", "SCdw", "SCig", "SCiw"] else "SCs"
 
-    if region.startswith("SSp-bfd"):
-        return "SSp-bfd"
+    #if region.startswith("SSp-bfd"):
+    #    return "SSp-bfd"
 
     #if region.startswith("VIS"):
     #    if region=='VISC':
@@ -201,9 +201,17 @@ def generalize_region(region):
     return region  # Default: no change
 
 
-def handle_ssp_bfd(region):
+
+def handle_bfd_barrels(region):
     """Special case: handle SSp-bfd barrels (e.g., "SSp-bfd-C4"/"SSp-bfd-Gamma" -> "SSp-bfd")."""
     return re.sub(r'SSp-bfd-[A-Za-z0-9]+', 'SSp-bfd', region) if "SSp-bfd" in region else region
+
+def handle_ssp_bfd(region, row=None):
+    """Special case: unify somatosensory orofacial-related subregions to 'SSp-oro'."""
+    if 'SSp-bfd' in region and row['target_region'] in ['wS1']:
+        return handle_bfd_barrels(region)
+    else:
+        return region
 
 def handle_ssp_whisker(region, row=None):
     """Special case: unify somatosensory orofacial-related subregions to 'SSp-oro'."""
@@ -284,6 +292,8 @@ def apply_context_handlers(region, row):
     produced by simplify_area(). Order matters: broader regroupings first,
     the most specific (target_region-gated) override last so it wins.
     """
+    # Here order matters for assignment
+    region = handle_ssp_bfd(region, row)
     region = handle_ssp_oro(region, row)
     region = handle_ssp_body(region, row)
     region = handle_lsf(region, row)
@@ -298,8 +308,9 @@ def apply_context_handlers(region, row):
 def simplify_area(ccf_acronym, ccf_parent_acronym):
     """Decide and return the simplified area name."""
     base_region = ccf_acronym if not contains_layer(ccf_acronym) or ccf_acronym in ['CA1', 'CA2',
-                                                                                    'CA3'] else ccf_parent_acronym
-    return handle_ssp_bfd(generalize_region(base_region))
+                                                                   'CA3'] else ccf_parent_acronym
+    #return handle_ssp_bfd(generalize_region(base_region))
+    return generalize_region(base_region)
 
 
 def create_area_custom_column(df):
@@ -373,13 +384,13 @@ def create_ccf_acronym_no_layer_column(df):
         col='ccf_atlas_acronym'
         col_parent='ccf_atlas_parent_acronym'
         df['ccf_atlas_acronym_no_layer'] = df.apply(
-            lambda row: handle_ssp_bfd(row[col_parent]) if contains_layer(row[col]) else row[col], axis=1)
+            lambda row: handle_bfd_barrels(row[col_parent]) if contains_layer(row[col]) else row[col], axis=1)
 
     elif 'ccf_acronym' in df.columns and 'ccf_parent_acronym' in df.columns:
         col='ccf_acronym'
         col_parent='ccf_parent_acronym'
         df['ccf_acronym_no_layer'] = df.apply(
-            lambda row: handle_ssp_bfd(row[col_parent]) if contains_layer(row[col]) else row[col], axis=1)
+            lambda row: handle_bfd_barrels(row[col_parent]) if contains_layer(row[col]) else row[col], axis=1)
     else:
         print('Warning: cannot estimate ccf column without layer.')
     return df
@@ -1008,7 +1019,7 @@ def simplify_area_no_layer(ccf_acronym, ccf_parent_acronym):
     Use this to build MERGE_KEY for external area-lookup tables (Harris, Gao, Liu),
     since it stays in the same raw nomenclature as unit_table's MERGE_KEY."""
     base = ccf_parent_acronym if contains_layer(ccf_acronym) else ccf_acronym
-    return handle_ssp_bfd(base)
+    return handle_bfd_barrels(base)
 
 def merge_liu_avg_ipsi_opt(df, cols_priority=None):
     """
