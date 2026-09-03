@@ -74,7 +74,7 @@ def get_excluded_areas():
                       'VL', 'I', 'VS'
                       'nan',
                       ]
-    #ignored_areas = ['ND', 'VISC', 'SPp-ll', 'GU', 'HA', 'HY', 'MA', 'NOT', 'P'] #areas to ignore because too few neurons
+    #ignored_areas = ['ND', 'VISC', 'SSp-ll', 'GU', 'HA', 'HY', 'MA', 'NOT', 'P'] #areas to ignore because too few neurons
     return excluded_areas
 
 
@@ -458,11 +458,11 @@ def get_custom_area_groups_colors():
     area_group_colors = {
         'Motor and frontal areas': '#1f9d5a',
         'Motor areas': '#1f9d5a',
-        'Frontal areas': '#4f07b3',
+        'Frontal areas': '#8333f2',
         'Somatosensory areas': '#188064',
-        'Somatosensory-orofacial': '#188064',
-        'Somatosensory-body': '#188044',
-        'Somatosensory-whisker': '#e3a514',
+        'Somatosensory-orofacial': '#a66829',
+        'Somatosensory-body': '#e0c92f',
+        'Somatosensory-whisker': '#f7b519',
         'Auditory areas': '#2c2cdb',
         'Retrosplenial areas': '#1aa698',
         'Posterior parietal areas': '#009fac',
@@ -470,14 +470,14 @@ def get_custom_area_groups_colors():
         'Insular areas':'#219866',
         'Hippocampus': '#7ed04b',
         'Cortical subplate': '#69b366',
-        'Striatum': '#63baeb',
+        'Striatum': '#54c2ff',
         'Pallidum': '#7a94d6',
-        'Lateral septal complex': '#5ebff7',
-        'Thalamus': '#f0485b',
-        'Midbrain': '#d647d6',
+        'Lateral septal complex': '#90e7ed',
+        'Thalamus': '#ff8084',
+        'Midbrain': '#ff90ff',
         'Pons and medulla': '#fcae72',
         'Olfactory areas': '#7bc9ac',
-        'Amygdala and hypothalamus': '#c23227'
+        'Amygdala and hypothalamus': '#e64438'
     }
     return area_group_colors
 
@@ -832,8 +832,8 @@ def create_thalamic_groupings(df, verbose=False):
     midline_intralaminar = {"PVT", "PT", "Re", "Rh", "Xi", "CM", "CL", "PC", "Pf", "PIL", "ILM", "IntG", "ILN"}
     ventral           = {"VPM", "VPL", "VPMpc", "VPLpc", "VAL", "VM", "PoT", "VP", "VT"}
     posterior_lp      = {"PO", "LP", "SPA", "PP", "SGN", "Eth", "SubG"}
-    visual_lgn        = {"LGd", "LGd-co", "LGd-ip", "LGd-sh", "LGv", "IGL", "OPT", "LGN"}
-    auditory_mgn      = {"MGv", "MGd", "MGm", "MG", "MGN"}
+    visual_lgn        = {"LGd", "LGd-co", "LGd-ip", "LGd-sh", "LGv", "IGL", "OPT"}
+    auditory_mgn      = {"MGv", "MGd", "MGm", "SG", "LT", "MG", "MGN"}
     reticular         = {"RT"}
 
     def classify(acronym):
