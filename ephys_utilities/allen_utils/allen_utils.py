@@ -452,7 +452,7 @@ def get_custom_area_groups():
     return area_groups
 
 def get_area_group_custom_order():
-    return get_custom_area_groups().keys()
+    return list(get_custom_area_groups().keys())
 
 def get_custom_area_groups_from_name():
     """
@@ -489,6 +489,34 @@ def get_custom_area_groups_colors():
         'Pons and medulla': '#fcae72',
         'Olfactory areas': '#7bc9ac',
         'Amygdala and hypothalamus': '#e64438'
+    }
+    return area_group_colors
+
+def get_custom_area_groups_allen_colors():
+    """Get custom area group colors for plotting, here Allen colors."""
+    area_group_colors = {
+        'Motor and frontal areas': '#1F9D5A',   # MO (Somatomotor areas)
+        'Motor areas': '#1F9D5A',                # MO (Somatomotor areas)
+        'Frontal areas': '#268F45',               # FRP (Frontal pole)
+        'Somatosensory areas': '#188064',         # SS (Somatosensory areas)
+        'Somatosensory-orofacial': '#188064',     # see note below
+        'Somatosensory-body': '#188064',          # see note below
+        'Somatosensory-whisker': '#188064',       # see note below
+        'Auditory areas': '#019399',              # AUD (Auditory areas)
+        'Retrosplenial areas': '#1AA698',         # RSP (Retrosplenial area)
+        'Posterior parietal areas': '#009FAC',    # PTLp (Posterior parietal association areas)
+        'Visual areas': '#08858C',                # VIS (Visual areas)
+        'Insular areas': '#219866',               # AI (Agranular insular area)
+        'Hippocampus': '#7ED04B',                 # HPF (Hippocampal formation)
+        'Cortical subplate': '#8ADA87',           # CTXsp
+        'Striatum': '#98D6F9',                    # STR
+        'Pallidum': '#8599CC',                    # PAL
+        'Lateral septal complex': '#90CBED',      # LSX
+        'Thalamus': '#FF7080',                    # TH
+        'Midbrain': '#FF64FF',                    # MB (not independently re-verified — see note)
+        'Pons and medulla': '#FF909F',            # not independently re-verified — see note
+        'Olfactory areas': '#9AD2BD',              # OLF
+        'Amygdala and hypothalamus': '#E64438'    # not independently re-verified — see note
     }
     return area_group_colors
 
@@ -1093,8 +1121,8 @@ def _merge_and_report(df, source_df, value_col, source_name):
           f"{len(unmatched)} unmatched {MERGE_KEY} values.")
     #if matched:
         #print(f"  Matched: {matched}")
-    #if unmatched:
-        #print(f"  Unmatched: {unmatched}")
+    if unmatched:
+        print(f"  Unmatched: {unmatched}")
 
     return df
 
@@ -1123,6 +1151,7 @@ def load_process_hierarchy_from_harris():
     #hierarchy_df[MERGE_KEY] = hierarchy_df['area_acronym_custom']
 
     hierarchy_df = _dedupe_on_key(hierarchy_df, ['cc_tc_ct_iterated'], 'Harris hierarchy')
+    hierarchy_df = hierarchy_df[[MERGE_KEY, 'cc_tc_ct_iterated']].dropna(subset=[MERGE_KEY])
     return hierarchy_df
 
 
@@ -1234,11 +1263,13 @@ def merge_hierarchy_columns_from_gao(df):
     cortical_areas = set(hierarchy_df[MERGE_KEY].unique())
 
     df = df.copy()
+    isocortex_mask = df[df['isocortex_group']=='Isocortex']
     df['cc_hierarchy_score_columns'] = np.nan
     df['nearest_gao_column_id'] = np.nan
 
     is_eligible = df[MERGE_KEY].isin(cortical_areas)
-    #print('Matched:', list(df[MERGE_KEY][is_eligible].unique()))
+    print('Matched:', list(df[MERGE_KEY][is_eligible].unique()))
+    print('Unmatched:', list(df[MERGE_KEY][~is_eligible].unique()))
     n_eligible = int(is_eligible.sum())
     n_total = len(df)
 

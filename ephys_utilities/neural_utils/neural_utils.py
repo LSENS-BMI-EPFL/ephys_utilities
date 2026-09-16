@@ -12,12 +12,15 @@ import pandas as pd
 import scipy.ndimage
 from multiprocessing import Pool
 import matplotlib
+
+#import ephys_utilities
+
 matplotlib.use('Agg')  # 'TkAgg' 'Agg' 'Qt5Agg'
 import matplotlib.pyplot as plt
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
-from ephys_utilities.helpers.data_utils import convert_electrode_group_object_to_columns, keep_active_trials
+#from ephys_utilities.helpers.data_utils import convert_electrode_group_object_to_columns, keep_active_trials
 
 TRIAL_MAP = {
     0: 'whisker_miss',
@@ -1122,7 +1125,7 @@ def build_peth_table_parallel_block(trial_table, unit_table, params, proc_data_p
     trial_table['block_id'] = trial_table['trial_id_type'] // params['block_size']
 
     # Convert info from electrode group object into columns (group name, probe location, target area)
-    unit_table = convert_electrode_group_object_to_columns(unit_table)
+    unit_table = ephys_utilities.helpers.data_utils.convert_electrode_group_object_to_columns(unit_table)
 
     # Group trial table by mouse_id and pass it along with the cluster for each unit
     unit_args = [(cluster, trial_table[trial_table['mouse_id'] == cluster['mouse_id']], params)
@@ -1187,7 +1190,7 @@ def build_peth_table_parallel_inflection(trial_table, unit_table, params, proc_d
 
     # Select for passive, optionally
     if not params['include_passive']:
-        trial_table = keep_active_trials(trial_table)
+        trial_table = ephys_utilities.helpers.data_utils.keep_active_trials(trial_table)
 
     # Map performance to outcome in trial_table
     trial_table['outcome'] = trial_table['perf'].astype(int).map(TRIAL_MAP)

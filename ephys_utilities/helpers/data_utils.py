@@ -13,7 +13,8 @@ import pandas as pd
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
-
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 from ephys_utilities.neural_utils import neural_utils
 
 # Custom imports
@@ -131,8 +132,6 @@ def combine_ephys_nwb(nwb_list, day_to_analyze='learning', max_workers=24):
 
 
 
-
-
 def convert_electrode_group_object_to_columns(data):
     """
     Convert electrode group object to dictionary.
@@ -217,7 +216,7 @@ def keep_active_from_whisker_onset(trial_df):
 
 
 
-def keep_passive_mice(data_df):
+def keep_video_mice(data_df):
     print('Filtering for mice with valid video data...')
     mice_no_video = ['AB080','AB082','AB085', 'AB155',
                      'MH065']

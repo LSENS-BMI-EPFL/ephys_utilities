@@ -271,7 +271,7 @@ def load_wf_analysis_data(nwb_files, experimenter): #TODO: make sure merge is po
 
         # Check if file exists
         file_path = os.path.join(data_path, mouse_id, 'whisker_0', 'waveform_analysis',
-                                 f'{mouse_id}_waveform_type.csv')
+                                 f'{mouse_id}_cortical_wf_type.csv')
         if os.path.exists(file_path):
             df = pd.read_csv(file_path)
             data_list.append(df)

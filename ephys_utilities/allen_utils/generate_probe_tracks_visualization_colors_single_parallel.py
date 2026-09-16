@@ -601,6 +601,7 @@ def _process_single_mouse_sessions(params: dict, m_name: str, mouse_probes: pd.D
         scene.close()
         n_figures += 1
 
+    print(f"Saved single-mouse probe tracks in {fig_name}")
     return m_name, n_figures
 
 
@@ -682,7 +683,9 @@ def generate_per_session_visualizations(params: dict, parallel: bool = False, ma
                 print(f"  {m_name}: FAILED — {e}")
 
 
+# --------------------------------------
 # Define the dictionary with parameters
+#----------------------------------------
 params = {
     'input_data_path_axel': r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\analysis\Axel_Bisi\data',
     'input_data_path_myriam': r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\analysis\Myriam_Hamon\data',
@@ -748,9 +751,9 @@ params = {
 }
 
 if __name__ == "__main__":
-    mode     = 'combined'  # 'combined' (one figure across all mice/sessions) or 'per_session'
-    parallel = False        # run jobs across multiple worker processes
-    max_workers = 5     # None = cpu_count() - 1; lower this if you hit GPU/memory issues
+    mode     = 'per_session'  # 'combined' (one figure across all mice/sessions) or 'per_session'
+    parallel = True        # run jobs across multiple worker processes
+    max_workers = 2     # None = cpu_count() - 1; lower this if you hit GPU/memory issues
 
     if mode == 'combined':
         color_by_sweep = ['area_acronym_custom', 'reward_group', 'target_area', 'none']
@@ -775,6 +778,6 @@ if __name__ == "__main__":
         params['color_by']    = 'area_acronym_custom'
         params['camera_view'] = 'top'
         params['file_format'] = 'png'
-        params['mouse_ids']   = ['MH021']  # <-- set the mice to render here
+        params['mouse_ids']   = ['AB127','AB156']  # <-- set the mice to render here
         params['analyzer']    = 'Axel_Bisi'         # <-- ALL figures save under analysis/Axel_Bisi/data/..., regardless of mouse
         generate_per_session_visualizations(params, parallel=parallel, max_workers=max_workers)
