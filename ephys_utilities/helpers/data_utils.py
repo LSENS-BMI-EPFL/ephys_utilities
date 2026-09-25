@@ -254,7 +254,10 @@ def keep_shared_areas(data_df, nomenclature, n_min_units=5, n_min_mice=3):
 
     # Count unique elements
     if n_min_units > 0 or n_min_mice > 0:
-        bc_mask = data_df['quality_label'].isin(['good', 'mua'])
+        try:
+            bc_mask = data_df['quality_label'].isin(['good', 'mua'])
+        except KeyError:
+            bc_mask = data_df['bc_label'].isin(['good', 'mua'])
 
         # Count unique units per area and reward group, across all mice
         n_units_rplus = (
