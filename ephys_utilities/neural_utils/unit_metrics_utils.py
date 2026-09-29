@@ -263,7 +263,7 @@ DEFAULT_METRIC_THRESHOLDS = { #min/max thresholds for good unit classification, 
     "presence_ratio": (0.5, None),
     "coverage_ratio": (0.9, None),
     "drift_shift_test_pval": (0.01, None),
-    "drift_abs_r": (0.5, None),
+    "drift_abs_r": (None, 0.5),   # pass when |r| <= 0.5: joint fail = |r| > 0.5 AND p < 0.01
 }
 ROUTE_THRESHOLDS = {
     "nSpikes": "mua",
@@ -302,7 +302,9 @@ def classify_units_quality(unit_table: pd.DataFrame,
 
     drift_abs_r and drift_shift_test_pval are evaluated JOINTLY as a single combined
     criterion rather than two independent metrics: a unit only fails the drift check
-    if BOTH are simultaneously out of range. Passing either one on its own is enough
+    if BOTH are simultaneously out of range, i.e. its firing rate is BOTH strongly
+    (|r| > 0.5) AND significantly (p < 0.01) correlated with probe motion (DREDge
+    shift test). Failing only one of the two, or neither, does not flag the unit. Passing either one on its own is enough
     to pass the combined check (protects against either metric alone being noisy).
     Excluding either name in `exclude` drops the whole joint check.
     """
