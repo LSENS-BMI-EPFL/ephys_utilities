@@ -26,4 +26,4 @@ dependencies = [
     ]
 
 [tool.setuptools.packages.find]
-include = ["allen_utils*", "helpers*", "neural_utils*", "plotting_utils*"]
+include = ["ephys_utilities*", "allen_utils*", "helpers*", "neural_utils*", "plotting_utils*"]
