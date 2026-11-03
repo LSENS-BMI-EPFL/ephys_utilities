@@ -960,7 +960,6 @@ def process_allen_labels(df, split_merge_areas=False):
     isocortex2group = {area: group for group, areas in get_isocortex_mapping().items() for area in areas}
     df['isocortex_group'] = df['area_acronym_custom'].map(isocortex2group).fillna('Other')
 
-
     return df
 
 def keep_shared_areas(data_df, nomenclature, n_min_units=10, n_min_mice=3):

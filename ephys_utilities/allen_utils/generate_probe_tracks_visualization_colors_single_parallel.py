@@ -737,7 +737,7 @@ params = {
     'label_areas': False,
     'scale': 3,
     'file_format': 'png',  # 'png', 'svg', 'pdf', 'eps'
-    'learning_category': ['moderate','good'],
+    'learning_category': ['moderate','good','bad'],
     'day_of_recording': [0],  # list of day_of_recording values, or [0,1,...] for multiple
     'mouse_ids': [],  # e.g. ['AB123', 'MH045'] to restrict per-session figures to specific mice; None/[] = all mice
     'analyzer': 'Axel_Bisi',  # always determines where per-session figures are saved: analysis/<analyzer>/data/<mouse>/<session>/Anatomy/figures
@@ -751,13 +751,12 @@ params = {
 }
 
 if __name__ == "__main__":
-    mode     = 'per_session'  # 'combined' (one figure across all mice/sessions) or 'per_session'
-    parallel = True        # run jobs across multiple worker processes
-    max_workers = 2     # None = cpu_count() - 1; lower this if you hit GPU/memory issues
+    mode     = 'combined'  # 'combined' (one figure across all mice/sessions) or 'per_session'
+    parallel = False        # run jobs across multiple worker processes
+    max_workers = 1     # None = cpu_count() - 1; lower this if you hit GPU/memory issues
 
     if mode == 'combined':
-        color_by_sweep = ['area_acronym_custom', 'reward_group', 'target_area', 'none']
-        color_by_sweep = ['reward_group']
+        color_by_sweep = ['none', 'area_acronym_custom', 'reward_group', 'target_area']
         camera_views   = ['sagittal', 'top', 'angled', 'frontal']
         file_formats   = ['png', 'svg', 'pdf']
 

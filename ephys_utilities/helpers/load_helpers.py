@@ -29,8 +29,8 @@ if 'haas' in hostname:
 
 else:
     MAX_WORKERS = 20
-    ROOT_PATH_AXEL = pathlib.Path(r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\analysis\Axel_Bisi\combined_results')
-    ROOT_PATH_MYRIAM = pathlib.Path(r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\analysis\Myriam_Hamon\combined_results')
+    ROOT_PATH_AXEL = pathlib.Path(r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\analysis\Axel_Bisi\combined_results_ks4')
+    ROOT_PATH_MYRIAM = ROOT_PATH_AXEL#pathlib.Path(r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\analysis\Myriam_Hamon\combined_results')
     sys.path.insert(0, r"M:\analysis\Axel_Bisi\NWB_reader")
     import NWB_reader_functions as nwb_reader
 
