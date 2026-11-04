@@ -39,9 +39,15 @@ Typical use:
     checks = check_dlc(nwb_file)                     # one row per camera, with flags
     jaw = clean_trace(views['side'].data['jaw_distance'], views['side'].timestamps, max_gap_s=0.05)
     t, m = peth(jaw, views['side'].timestamps, trial_starts, window=(-1, 2))
+    ok, verdict = pupil_session_ok(session_id)       # pupil QC verdict; 'fail' sessions excluded from pupil analyses
+    pupil, _ = clean_series(views['side'], 'pupil_area')  # pupil QC frame states (blink / squint / failed -> NaN)
+    pupil_pct = pupil_relative(pupil)                # % change from the session median
 """
 
 # Imports
+import glob
+import json
+import os
 from dataclasses import dataclass, field
 
 import h5py
@@ -143,6 +149,7 @@ class DLCView:
     n_frames_raw: int
     n_timestamps_raw: int
     masked: dict = field(default_factory=dict)  # series -> fraction of frames masked
+    session_id: str = ''  # NWB file name; used to find the pupil QC of the session
     fixed_reference: list = field(default_factory=list)  # keypoint groups recomputed by fix_zero_reference
 
     @property
@@ -246,7 +253,8 @@ def load_dlc(nwb_file, views=('side', 'top'), series=None, physical_units=True, 
             ts = ts[:n]
             out[view] = DLCView(view=view, timestamps=ts, data=data, likelihood=lik, units=units,
                                 rate=frame_rate(ts), n_frames_raw=n_data, n_timestamps_raw=len(grp[names[0]]['timestamps']),
-                                masked=masked, fixed_reference=fixed)
+                                masked=masked, fixed_reference=fixed,
+                                session_id=os.path.splitext(os.path.basename(str(nwb_file)))[0])
     return out
 
 
@@ -518,7 +526,8 @@ def clean_trace(x, timestamps=None, likelihood=None, cutoff=DEFAULT_CUTOFF, jump
     return x, bad
 
 
-# Default cleaning per series (user decisions 2026-11-03): none beyond what the NWB already has. The NWB series come
+# Default cleaning per series (user decisions 2026-11-03; pupil 2026-11-04): none beyond what the NWB already has,
+# except the pupil (running median + smoothing, below). The NWB series come
 # from DLC *filtered.h5 (DLC median filter) and dlc2kinematics smoothing (window 3) in the converter, so the default
 # returns the stored values: no likelihood mask (no NaN from likelihood thresholding), no extra median (median_s=0.015
 # available per call), gap interpolation <= 50 ms only acts on NaN (none without masking).
@@ -530,19 +539,44 @@ CLEAN_DEFAULTS = {
     'default': dict(cutoff=None, max_gap_s=0.05, jump_thresh=None, mad_thresh=None, smooth_sigma_s=None,
                     median_s=None),
     'jaw': dict(cutoff=None, max_gap_s=0.05, jump_thresh=None, mad_thresh=None, smooth_sigma_s=None, median_s=None),
+    # pupil (user, 2026-11-04): short spikes (blinks: DLC throws the points off the closed eye) removed by a running
+    # median over 0.1 s (excursions < ~50 ms disappear, steps stay sharp); no Gaussian (blurs onsets). Without the
+    # pupil QC only; with it use clean_pupil (blinks / squints / failed frames NaN first). Does not fix sessions where
+    # the eye is closed / occluded for long stretches (validation 012 / 013): pupil QC verdict 'fail'.
+    'pupil': dict(cutoff=None, max_gap_s=0.05, jump_thresh=None, mad_thresh=None, smooth_sigma_s=None, median_s=0.1),
 }
+
+# Tongue presence: tongue out where tongue_likelihood > this (user, 2026-11-04)
+TONGUE_PRESENCE_CUTOFF = 0.6
 
 
 def clean_defaults(name):
     """Default clean_trace parameters of a series (CLEAN_DEFAULTS)."""
-    return dict(CLEAN_DEFAULTS['jaw' if name.startswith('jaw') else 'default'])
+    key = 'jaw' if name.startswith('jaw') else 'pupil' if name.startswith('pupil') else 'default'
+    return dict(CLEAN_DEFAULTS[key])
 
 
-def clean_series(view, name, **overrides):
+def tongue_presence(view, cutoff=TONGUE_PRESENCE_CUTOFF):
+    """Tongue out (1) / in (0) per side frame from tongue_likelihood > cutoff; NaN where the likelihood is missing.
+    Averaged over trials it gives the probability of tongue out."""
+    lik = view.likelihood['tongue_likelihood'].to_numpy().astype(float)
+    return np.where(np.isfinite(lik), (lik > cutoff).astype(float), np.nan)
+
+
+def clean_series(view, name, pupil_qc=True, **overrides):
     """Clean one series of a DLCView (loaded with mask_likelihood=False) with the default parameters of that series
-    (clean_defaults), optionally overridden. :return: cleaned trace, rejected mask."""
+    (clean_defaults), optionally overridden. pupil_area: with the session's pupil QC when it exists (clean_pupil,
+    default, user 2026-11-04); pupil_qc=False or no QC output: running median of the stored trace only (a warning
+    is printed). Session-level exclusion is separate: pupil_session_ok. :return: cleaned trace, rejected mask."""
     p = clean_defaults(name)
     p.update(overrides)
+    if name == 'pupil_area':
+        frames = None
+        if pupil_qc:
+            frames, _ = load_pupil_qc(view.session_id) if view.session_id else (None, None)
+            if frames is None:
+                print(f'dlc_helpers: no pupil QC for {view.session_id or "this view"}; pupil_area without QC')
+        return clean_pupil(view, frames, median_s=p['median_s'])
     cutoff = p.pop('cutoff')
     gate = [l for l in likelihood_series(name) if l in view.likelihood]
     lik = None
@@ -569,6 +603,114 @@ def clean_trace_steps(x, timestamps, likelihood=None, cutoff=DEFAULT_CUTOFF, jum
         kw.update(params)
         steps[name] = clean_trace(x, timestamps, **kw)
     return steps
+
+
+# ---------------------------------
+# Pupil: QC frame states (ibl-ai-agent projects/ssl-pupil-qc)
+# ---------------------------------
+# Per session, the pupil QC writes <results>/<mouse>/<day folder>/pupil_qc/<session>_frames.parquet (one row per side
+# frame: t, state 0 valid / 1 blink / 2 squint / 3 failed, interpolated = failed gap <= 0.1 s between valid frames,
+# linearly interpolated) and <session>_metrics.json (verdict pass / warn / fail on % valid frames and % valid trials).
+
+PUPIL_QC_ROOTS = ('/mnt/lsens-analysis/Axel_Bisi/combined_results_ks4', r'M:\analysis\Axel_Bisi\combined_results_ks4',
+                  '//sv-nas1.rcp.epfl.ch/Petersen-Lab/analysis/Axel_Bisi/combined_results_ks4')
+PUPIL_STATE = {'valid': 0, 'blink': 1, 'squint': 2, 'failed': 3}
+# Sessions where one pupil point is systematically off the eye with high likelihood: pupil_area is recomputed with that
+# point replaced by the mirror image of the opposite point across the axis of the other two (user, 2026-11-04;
+# MH029 0502: right point off in 64% of frames; 3-point vs 4-point area on a clean session r = 0.988, -4%). Same list
+# in ibl-ai-agent projects/ssl-pupil-qc/pupil_qc.THREE_POINT (the QC states use the same area).
+PUPIL_THREE_POINT = {'MH029_20250502_110353': 'right'}
+_PUPIL_OPPOSITE = {'right': ('left', 'top', 'bottom'), 'left': ('right', 'top', 'bottom'),
+                   'top': ('bottom', 'left', 'right'), 'bottom': ('top', 'left', 'right')}
+
+
+def pupil_area(view):
+    """pupil_area of the side DLCView (units of the view), with the PUPIL_THREE_POINT correction for listed sessions:
+    the listed point is mirrored from its opposite point and the polygon area top -> right -> bottom -> left recomputed
+    (shoelace, as the converter)."""
+    point = PUPIL_THREE_POINT.get(view.session_id)
+    if point is None:
+        return view.data['pupil_area'].to_numpy().astype(float).copy()
+    d = {f'{q}_{c}': view.data[f'pupil_{q}_{c}'].to_numpy().astype(float) for q in ('top', 'right', 'bottom', 'left')
+         for c in ('x', 'y')}
+    opp, a, b = _PUPIL_OPPOSITE[point]
+    dx, dy = d[f'{b}_x'] - d[f'{a}_x'], d[f'{b}_y'] - d[f'{a}_y']
+    nrm = np.hypot(dx, dy)
+    nrm[nrm == 0] = np.nan
+    ux, uy = dx / nrm, dy / nrm
+    proj = (d[f'{opp}_x'] - d[f'{a}_x']) * ux + (d[f'{opp}_y'] - d[f'{a}_y']) * uy
+    px, py = d[f'{a}_x'] + proj * ux, d[f'{a}_y'] + proj * uy
+    d[f'{point}_x'], d[f'{point}_y'] = 2 * px - d[f'{opp}_x'], 2 * py - d[f'{opp}_y']
+    x = np.column_stack([d[f'{q}_x'] for q in ('top', 'right', 'bottom', 'left')])
+    y = np.column_stack([d[f'{q}_y'] for q in ('top', 'right', 'bottom', 'left')])
+    return 0.5 * np.abs(np.sum(x * np.roll(y, -1, 1) - y * np.roll(x, -1, 1), 1))
+PUPIL_MEDIAN_S = 0.1  # running median after the QC mask (user, 2026-11-04)
+
+
+def load_pupil_qc(session_id, roots=PUPIL_QC_ROOTS):
+    """Pupil QC of a session: (frames DataFrame, metrics dict), or (None, None) if the session has no QC output."""
+    mouse = session_id.split('_')[0]
+    for root in roots:
+        hits = glob.glob(os.path.join(root, mouse, '*', 'pupil_qc', f'{session_id}_frames.parquet'))
+        if hits:
+            frames = pd.read_parquet(hits[0])
+            mpath = hits[0].replace('_frames.parquet', '_metrics.json')
+            metrics = json.load(open(mpath)) if os.path.exists(mpath) else {}
+            return frames, metrics
+    return None, None
+
+
+def pupil_qc_valid(view, frames):
+    """Per frame of the side DLCView: True where the pupil QC calls the frame valid or interpolated (matched on the
+    frame timestamps; frames missing from the QC are not valid)."""
+    t = frames['t'].to_numpy()
+    ok = ((frames['state'].to_numpy() == PUPIL_STATE['valid']) | frames['interpolated'].to_numpy())
+    i = np.clip(np.searchsorted(t, view.timestamps), 0, len(t) - 1)
+    j = np.where((i > 0) & (np.abs(t[i - 1] - view.timestamps) < np.abs(t[i] - view.timestamps)), i - 1, i)
+    match = np.abs(t[j] - view.timestamps) < 0.25 * np.median(np.diff(view.timestamps))
+    return match & ok[j]
+
+
+def clean_pupil(view, frames=None, median_s=PUPIL_MEDIAN_S):
+    """Pupil area of the side DLCView (mm^2 if loaded in physical units) cleaned with the pupil QC frame states:
+    NaN on blink, squint and failed frames, failed gaps <= 0.1 s between valid frames linearly interpolated (as in the
+    QC), then a NaN-aware running median over median_s (a window needs more than half of its frames valid).
+    Without QC frames: running median of the stored trace only (clean_series default).
+    :return: cleaned trace, boolean mask of frames not used (QC not valid)."""
+    x = pupil_area(view)
+    if frames is None:
+        return clean_trace(x, view.timestamps, median_s=median_s, **{k: v for k, v in clean_defaults('pupil_area').items()
+                                                                     if k not in ('cutoff', 'median_s')})
+    valid = pupil_qc_valid(view, frames)
+    t, f_interp = frames['t'].to_numpy(), frames['interpolated'].to_numpy()
+    k = np.clip(np.searchsorted(t, view.timestamps), 0, len(t) - 1)
+    interp = valid & f_interp[k] & (np.abs(t[k] - view.timestamps) < 0.25 * np.median(np.diff(view.timestamps)))
+    x[~valid | interp] = np.nan
+    keep = valid & ~interp
+    if interp.any() and keep.sum() > 1:
+        idx = np.arange(len(x))
+        x[interp] = np.interp(idx[interp], idx[keep], x[keep])
+    if median_s:
+        w = max(3, int(round(median_s / np.median(np.diff(view.timestamps)))) | 1)
+        x = np.array(pd.Series(x).rolling(w, center=True, min_periods=w // 2 + 1).median(), dtype=float)
+        x[~valid] = np.nan
+    return x, ~valid
+
+
+def pupil_session_ok(session_id, allowed=('pass', 'warn')):
+    """(usable, verdict) of a session for pupil analyses from its pupil QC verdict (user, 2026-11-04: 'fail'
+    sessions excluded; sessions without QC output are not usable until the QC is run)."""
+    _, metrics = load_pupil_qc(session_id)
+    verdict = metrics.get('verdict', 'no QC') if metrics is not None else 'no QC'
+    return verdict in allowed, verdict
+
+
+def pupil_relative(x, kind='percent'):
+    """Pupil area relative to the session: 'percent' = 100 x (x / median - 1) over valid frames (removes pupil size
+    differences between mice, cameras and setups), 'z' = (x - mean) / SD."""
+    if kind == 'percent':
+        return 100 * (x / np.nanmedian(x) - 1)
+    return (x - np.nanmean(x)) / np.nanstd(x)
 
 
 # ---------------------------------
