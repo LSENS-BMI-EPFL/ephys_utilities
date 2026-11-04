@@ -78,8 +78,8 @@ def process_single_nwb(nwb, day_to_analyze = 'learning', apply_artifact_correcti
             # what a particular downstream analysis will later select.
             whisker_onset_times = trial_table[trial_table['whisker_stim'] == 1]['start_time'].values
             rng = np.random.default_rng()
-            units = unit_table.copy()
-            units['spike_times'] = units['spike_times'].apply(
+            unit_table = unit_table.copy()
+            unit_table['spike_times'] = unit_table['spike_times'].apply(
                 lambda st: neural_utils.correct_neuron_spike_train(st, whisker_onset_times, rng)
             )
 
