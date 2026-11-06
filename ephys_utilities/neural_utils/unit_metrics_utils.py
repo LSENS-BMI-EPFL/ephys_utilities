@@ -170,13 +170,40 @@ def merge_unit_quantifications(unit_table, *dfs, verbose=True):
 
 
 
+def get_excluded_intervals_from_nwb(nwb_file, epoch_names=('recording_gap',)):
+    """(start, stop) intervals of the given BehavioralEpochs of an NWBFile, e.g. 'recording_gap' (time without
+    recording between two joined runs). Returns [] if the session has none."""
+    if 'behavior' not in nwb_file.processing or 'BehavioralEpochs' not in nwb_file.processing['behavior'].data_interfaces:
+        return []
+    epochs = nwb_file.processing['behavior']['BehavioralEpochs'].interval_series
+    out = []
+    for name in epoch_names:
+        if name in epochs:
+            ts = np.asarray(epochs[name].timestamps[:], dtype=float)
+            out.extend(zip(ts[0::2], ts[1::2]))
+    return out
+
+
+def _remove_excluded_time(spike_times, intervals):
+    """Drop spikes inside the excluded (start, stop) intervals and close the intervals: each later spike is moved
+    earlier by the excluded duration before it, so time-based metrics see a continuous recording."""
+    s = np.asarray(spike_times, dtype=float)
+    for start, stop in sorted(intervals, reverse=True):
+        s = s[(s < start) | (s >= stop)]
+        s = np.where(s >= stop, s - (stop - start), s)
+    return s
+
+
 def compute_presence_ratio(unit_df, spike_times_col='spike_times', bin_size=60.0,
-                            session_col='session_id'):
+                            session_col='session_id', exclude_intervals=None):
     """Compute the fraction of 60-s recording bins containing >=1 spike, per unit.
 
     Recording boundaries (earliest -> latest spike) are computed PER SESSION
     (grouped by session_col), not pooled across the whole unit_df - so units
     from different sessions are scored against their own session's duration.
+
+    exclude_intervals: optional {session_id: [(start, stop), ...]} of time without recording (e.g. the NWB
+    BehavioralEpochs 'recording_gap', see get_excluded_intervals_from_nwb), removed before binning.
 
     Returns
     -------
@@ -184,9 +211,11 @@ def compute_presence_ratio(unit_df, spike_times_col='spike_times', bin_size=60.0
         Presence ratio for each unit, aligned with unit_df.index.
     """
     out = pd.Series(0.0, index=unit_df.index)
+    exclude_intervals = exclude_intervals or {}
 
-    for _, session_df in unit_df.groupby(session_col):
-        all_spikes = [np.asarray(s) for s in session_df[spike_times_col]]
+    for session_id, session_df in unit_df.groupby(session_col):
+        all_spikes = [_remove_excluded_time(s, exclude_intervals.get(session_id, []))
+                      for s in session_df[spike_times_col]]
         non_empty = [s for s in all_spikes if len(s) > 0]
         if not non_empty:
             continue
@@ -208,7 +237,7 @@ def compute_presence_ratio(unit_df, spike_times_col='spike_times', bin_size=60.0
 
 
 
-def compute_coverage_ratio(unit_df, spike_times_col='spike_times', session_col='session_id'):
+def compute_coverage_ratio(unit_df, spike_times_col='spike_times', session_col='session_id', exclude_intervals=None):
     """Fraction of the recording duration spanned by each unit's own spike train,
     reimplemented from baseline_analysis.py's filter_units_by_quality
     (cicada_analysis/templates/baseline_analysis.py) - same formula, applied
@@ -223,11 +252,16 @@ def compute_coverage_ratio(unit_df, spike_times_col='spike_times', session_col='
 
     Returns a pd.Series aligned to unit_df's index; 1.0 = spikes span the full
     recording, 0.0 for units with <2 spikes or an unusable duration.
+
+    exclude_intervals: optional {session_id: [(start, stop), ...]} of time without recording, removed first (as in
+    compute_presence_ratio).
     """
     out = pd.Series(0.0, index=unit_df.index)
+    exclude_intervals = exclude_intervals or {}
 
-    for _, session_df in unit_df.groupby(session_col):
-        all_spikes = [np.asarray(s) for s in session_df[spike_times_col]]
+    for session_id, session_df in unit_df.groupby(session_col):
+        all_spikes = [_remove_excluded_time(s, exclude_intervals.get(session_id, []))
+                      for s in session_df[spike_times_col]]
         firsts = [s[0] for s in all_spikes if len(s) > 0]
         lasts = [s[-1] for s in all_spikes if len(s) > 0]
         if firsts and lasts:
@@ -244,10 +278,12 @@ def compute_coverage_ratio(unit_df, spike_times_col='spike_times', session_col='
 
 
 
-def compute_presence_coverage_metrics(unit_table):
-    """ Computes presence and coverage ratio to units."""
-    unit_table['coverage_ratio'] = compute_coverage_ratio(unit_table)
-    unit_table['presence_ratio'] = compute_presence_ratio(unit_table)
+def compute_presence_coverage_metrics(unit_table, exclude_intervals=None):
+    """ Computes presence and coverage ratio to units.
+    exclude_intervals: optional {session_id: [(start, stop), ...]} of time without recording (NWB BehavioralEpochs
+    'recording_gap', see get_excluded_intervals_from_nwb)."""
+    unit_table['coverage_ratio'] = compute_coverage_ratio(unit_table, exclude_intervals=exclude_intervals)
+    unit_table['presence_ratio'] = compute_presence_ratio(unit_table, exclude_intervals=exclude_intervals)
     return unit_table
 
 DEFAULT_METRIC_THRESHOLDS = { #min/max thresholds for good unit classification, based on Bombcell et al. 2023

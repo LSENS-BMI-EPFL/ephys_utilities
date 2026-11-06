@@ -223,7 +223,42 @@ def keep_video_mice(data_df):
     data_df = data_df[~data_df['mouse_id'].isin(mice_no_video)]
     return data_df
 
+# Units excluded from passive (pre vs post) analyses, per session and probe (imec id).
+# AB155 day 0: joined session (runs g0 + g1 sorted together, passive post recorded ~900 s after the end of the active
+# block). On imec4 many units collapse or change at the junction (tissue / waveform change during the gap, not drift;
+# not caught by presence / coverage / drift-shift test): passive pre and passive post are not the same units.
+# Takes effect once the joined AB155 NWB (with passive post) replaces the pre-only one and AB155 is removed from the
+# mouse-level exclusion below.
+PASSIVE_EXCLUDED_PROBES = {
+    'AB155_20250208_175103': [4],
+}
+
+
+def _imec_ids(data_df):
+    """Integer imec id per row from an imec_id column or electrode_group strings (imec4, imec4_shank0, ...)."""
+    if 'imec_id' in data_df.columns:
+        return pd.to_numeric(data_df['imec_id'], errors='coerce')
+    return pd.to_numeric(data_df['electrode_group'].astype(str).str.extract(r'imec(\d+)', expand=False),
+                         errors='coerce')
+
+
+def keep_passive_units(data_df):
+    """Drop units listed in PASSIVE_EXCLUDED_PROBES (session x probe). Unit-level tables only (needs session_id and
+    imec_id or electrode_group); other tables are returned unchanged."""
+    if 'session_id' not in data_df.columns or not ({'imec_id', 'electrode_group'} & set(data_df.columns)):
+        return data_df
+    imec = _imec_ids(data_df)
+    drop = pd.Series(False, index=data_df.index)
+    for session_id, probes in PASSIVE_EXCLUDED_PROBES.items():
+        drop |= (data_df['session_id'] == session_id) & imec.isin(probes)
+    if drop.any():
+        print(f'Excluding {int(drop.sum())} rows of passive-excluded probes: {PASSIVE_EXCLUDED_PROBES}')
+    return data_df[~drop]
+
+
 def keep_passive_mice(data_df):
+    """Keep mice with passive pre AND post data, then drop passive-excluded units (keep_passive_units).
+    Use this (or its alias keep_passive_data) for every passive-data selection."""
     print('Filtering for mice with passive pre/post data...')
     mouse_ids = data_df['mouse_id'].unique()
     passive_mouse_ids = []
@@ -231,6 +266,8 @@ def keep_passive_mice(data_df):
         if m.startswith('AB'):
             try:
                 if int(m[2:]) >= 116:
+                    # AB155: pre-only in the current NWB; remove from this list once the joined NWB (passive post
+                    # included) is in place -- its imec4 units are then excluded by keep_passive_units
                     if m not in ['AB144', 'AB155']:
                         passive_mouse_ids.append(m)
             except ValueError:
@@ -238,7 +275,10 @@ def keep_passive_mice(data_df):
         elif m.startswith('MH'):
             if m not in ['MH013']:  # no passive post for MH013
                 passive_mouse_ids.append(m)
-    return data_df[data_df['mouse_id'].isin(passive_mouse_ids)]
+    return keep_passive_units(data_df[data_df['mouse_id'].isin(passive_mouse_ids)])
+
+
+keep_passive_data = keep_passive_mice
 
 
 
