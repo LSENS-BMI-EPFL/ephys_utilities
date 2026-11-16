@@ -238,12 +238,11 @@ VIDEO_EXCLUDED_SESSIONS = {
     'MH020_20250304_161732': (('top',), 'top DLC / video length != pulses, no run matches'),
     'MH028_20250503_112316': (('top',), 'top video probably tracked with the side model (side DLC end-aligned in the '
                               'NWB reconverted 2026-11-09)'),
-    # top frames dropped in chunks during the video, top offsets not recoverable (no stimulus-locked top marker on the
-    # MH rig); side cameras re-fitted from licks and verified (ibl-ai-agent ssl-dlc-alignment-debug 010-013, 2026-11-16)
-    'MH017_20250302_120918': (('top',), 'top frames dropped in chunks; top clause misses the final ~+420 step'),
-    'MH013_20250219_170437': (('top',), 'top frames dropped in chunks; top clause misses the final ~+470 step'),
-    'AB092_20231205_140109': (('top',), 'top 8,115 frames short (VLC-converted video); misaligned after ~1/3 session'),
-    'AB095_20231212_141728': (('top',), 'top >= 6 frames early throughout (stimulus-locked artefact before stimulus)'),
+    # top camera offset throughout, not corrected (ibl-ai-agent ssl-dlc-alignment-debug 012 / 014, 2026-11-16). The tops of
+    # MH013_20250219, MH017_20250302 and AB092_20231205 (excluded earlier the same day) were re-fitted against the
+    # corrected side camera and reconverted (017 / 019), so they are usable again.
+    'AB095_20231212_141728': (('top',), 'top ~13 frames early throughout (top vs side nose lag; stimulus-locked artefact '
+                              'before the stimulus)'),
 }
 
 
