@@ -18,6 +18,12 @@ How the NWB stores DLC (AB / MH, compute_kinematics_alt), which this module reli
 - timestamps = camera pulses on the session clock, one per frame. Both cameras are triggered on the same clock, but
   each camera can miss its own frames (and the saved video can start / end on a different pulse), so the side and top
   timestamp series are never assumed identical: each series is used with its own camera's timestamps.
+- timing rule (2026-11-10): session time <-> frame always through that camera's own timestamps (DLCView.timestamps,
+  frame_index, peth), never (t - video start) x frame rate. The camera clock is not exactly the metadata camera_freq
+  (e.g. 200.002 Hz for 200: ~10 frames / 50 ms per 90 min) and each camera starts on its own pulse (side and top first
+  frames differ, e.g. 115 ms in AB116_20240726), so a nominal-rate mapping or another camera's start time drifts /
+  shifts the trial windows (behaviour_analysis find_dlc_jaw_onset_times before 2026-11-10: up to ~60 ms late at the
+  end of a session). check_dlc reports each camera's true rate, the nominal-mapping drift and the start offset.
 - tongue_dlc_licks / jaw_dlc_licks (BehavioralEvents) are kept on the video clock in the NWB (side frame index /
   frame rate, 0 = first side frame). get_dlc_lick_times corrects the session offset at loading.
 
@@ -265,7 +271,7 @@ def jaw_from_jaw_ref(raw, rate):
     :return: True if recomputed (jaw and jaw_ref positions present)."""
     if not all(k in raw for k in ('jaw_x', 'jaw_y', 'jaw_ref_x', 'jaw_ref_y')):
         return False
-    rx, ry = np.median(raw['jaw_ref_x']), np.median(raw['jaw_ref_y'])
+    rx, ry = np.nanmedian(raw['jaw_ref_x']), np.nanmedian(raw['jaw_ref_y'])
     dist = np.hypot(raw['jaw_x'] - rx, raw['jaw_y'] - ry)
     raw['jaw_distance'] = dist
     vel = np.zeros_like(dist)
@@ -299,16 +305,16 @@ def fix_zero_reference(raw, lik, view, rate, cutoff=DEFAULT_CUTOFF):
         if kp in NO_LIKELIHOOD_KEYPOINTS:
             ok = np.ones(len(ok), dtype=bool)  # jaw: reference over all frames (likelihood not used for the jaw)
         x, y = raw[f'{kp}_x'], raw[f'{kp}_y']
-        rx, ry = np.percentile(x[ok], pct), np.percentile(y[ok], pct)
+        rx, ry = np.nanpercentile(x[ok], pct), np.nanpercentile(y[ok], pct)
         if view == 'side':
             dy = y - ry
-            raw[f'{name}_angle'] = np.degrees(np.arcsin(dy / np.sqrt(dy ** 2 + (x - np.median(raw[base])) ** 2)))
+            raw[f'{name}_angle'] = np.degrees(np.arcsin(dy / np.sqrt(dy ** 2 + (x - np.nanmedian(raw[base])) ** 2)))
             if name == 'jaw' and 'tongue_y' in raw and 'tongue_x' in raw:
                 ty = raw['tongue_y'] - ry
-                raw['tongue_angle'] = np.degrees(np.arcsin(ty / np.sqrt(ty ** 2 + (raw['tongue_x'] - np.median(raw[base])) ** 2)))
+                raw['tongue_angle'] = np.degrees(np.arcsin(ty / np.sqrt(ty ** 2 + (raw['tongue_x'] - np.nanmedian(raw[base])) ** 2)))
         else:
             dx = rx - x
-            raw[f'{name}_angle'] = np.degrees(np.arcsin(dx / np.sqrt(dx ** 2 + (ry - np.median(raw[base])) ** 2)))
+            raw[f'{name}_angle'] = np.degrees(np.arcsin(dx / np.sqrt(dx ** 2 + (ry - np.nanmedian(raw[base])) ** 2)))
         dist = np.sqrt((y - ry) ** 2 + (x - rx) ** 2)
         raw[f'{name}_distance'] = dist
         vel = np.zeros_like(dist)
@@ -316,6 +322,31 @@ def fix_zero_reference(raw, lik, view, rate, cutoff=DEFAULT_CUTOFF):
         raw[f'{name}_velocity'] = vel
         fixed.append(name)
     return fixed
+
+
+def camera_metadata_rate(nwb_file):
+    """camera_freq of the session metadata (experiment_description dict, as NWB_reader.get_video_sampling_rate), Hz;
+    NaN if absent. Nominal only: use a camera's timestamps (or frame_rate / true rate in check_dlc) for timing."""
+    import ast
+    try:
+        with h5py.File(nwb_file, 'r') as f:
+            raw = f['general/experiment_description'][()]
+        meta = ast.literal_eval(raw.decode() if isinstance(raw, bytes) else str(raw))
+        return float(meta['camera_freq'])
+    except (KeyError, ValueError, SyntaxError, TypeError, OSError):
+        return np.nan
+
+
+def frame_index(view, times):
+    """Index of the frame of `view` (DLCView) nearest to each session time, from that camera's own timestamps (never
+    from a start time and a nominal rate); -1 where the time is more than half a frame outside the recording."""
+    ts = np.asarray(view.timestamps, dtype=float)
+    q = np.atleast_1d(np.asarray(times, dtype=float))
+    i = np.clip(np.searchsorted(ts, q), 1, len(ts) - 1)
+    j = np.where(np.abs(q - ts[i - 1]) <= np.abs(ts[i] - q), i - 1, i)
+    half = np.median(np.diff(ts)) / 2
+    j[~(np.abs(ts[j] - q) <= half + 1e-9)] = -1
+    return j
 
 
 def frame_rate(timestamps):
@@ -422,6 +453,7 @@ def check_dlc(nwb_file, cutoff=None):
     'side_offset' (alignment outside the expected range), 'no_dlc'."""
     rows = []
     views = load_dlc(nwb_file, mask_likelihood=False)
+    meta_rate = camera_metadata_rate(nwb_file)
     with h5py.File(nwb_file, 'r') as f:
         licks = f[EV_PATH]['piezo_lick_times']['timestamps'][:] if EV_PATH in f and 'piezo_lick_times' in f[EV_PATH] else np.array([])
         t = f['intervals/trials'] if 'intervals/trials' in f else None
@@ -441,6 +473,14 @@ def check_dlc(nwb_file, cutoff=None):
                    n_gaps=int(gaps.sum()), max_gap_s=float(dt.max()) if len(dt) else np.nan,
                    not_increasing=int((dt <= 0).sum()), camera_start=float(ts[0]), camera_stop=float(ts[-1]),
                    first_trial_start=t_first, last_trial_stop=t_last)
+        # camera clock vs metadata camera_freq: mean rate over the session, and the time error at the last frame of a
+        # nominal-rate mapping (t = first timestamp + frame / camera_freq); start offset vs the other camera
+        row['true_rate'] = (len(ts) - 1) / (ts[-1] - ts[0]) if len(ts) > 1 else np.nan
+        row['meta_rate'] = meta_rate
+        row['nominal_drift_ms'] = 1000 * ((len(ts) - 1) / meta_rate - (ts[-1] - ts[0])) \
+            if len(ts) > 1 and np.isfinite(meta_rate) else np.nan
+        other = [o for o in views if o != view]
+        row['start_minus_other_camera_ms'] = 1000 * (ts[0] - views[other[0]].timestamps[0]) if other else np.nan
         main = 'tongue_likelihood' if view == 'side' else 'whisker_angle'
         if view == 'side' and 'tongue_likelihood' in v.likelihood:
             row['lick_offset_frames'], row['lick_offset_z'] = _event_locked_offset(
@@ -697,12 +737,33 @@ def clean_pupil(view, frames=None, median_s=PUPIL_MEDIAN_S):
     return x, ~valid
 
 
-def pupil_session_ok(session_id, allowed=('pass', 'warn')):
-    """(usable, verdict) of a session for pupil analyses from its pupil QC verdict (user, 2026-11-04: 'fail'
-    sessions excluded; sessions without QC output are not usable until the QC is run)."""
+def pupil_session_ok(session_id, allowed=('pass', 'warn', 'fail')):
+    """(usable, verdict) of a session for pupil analyses. User 2026-11-12: no session is excluded on the QC verdict
+    (it is informational); exclusion is per trial (pupil_trial_ok) and per frame (clean_series / clean_pupil mask the
+    frames the QC does not call valid, likelihood cutoff 0.1). Sessions without QC output are not usable until the QC
+    is run. (2026-11-04 to 2026-11-12: 'fail' sessions were excluded.)"""
     _, metrics = load_pupil_qc(session_id)
     verdict = metrics.get('verdict', 'no QC') if metrics is not None else 'no QC'
     return verdict in allowed, verdict
+
+
+def pupil_trial_ok(session_id, starts, window=(-1.0, 2.0), frames=None):
+    """Per trial: True when the pupil QC finds no blink and no squint frame in [start + window[0], start + window[1])
+    (user, 2026-11-12: trial-wise exclusion, no obvious blinks / squints; low-likelihood frames are masked per frame by
+    clean_pupil, not excluded here). All False if the session has no QC output.
+    :param starts: trial start times (s, session clock).
+    :param frames: the session's QC frames (load_pupil_qc), loaded if None."""
+    starts = np.asarray(starts, dtype=float)
+    if frames is None:
+        frames, _ = load_pupil_qc(session_id)
+    if frames is None:
+        return np.zeros(len(starts), dtype=bool)
+    t = frames['t'].to_numpy()
+    bad = np.isin(frames['state'].to_numpy(), [PUPIL_STATE['blink'], PUPIL_STATE['squint']])
+    cum = np.r_[0, np.cumsum(bad)]
+    lo = np.searchsorted(t, starts + window[0])
+    hi = np.searchsorted(t, starts + window[1])
+    return (cum[hi] - cum[lo] == 0) & (hi > lo)
 
 
 def pupil_relative(x, kind='percent'):
@@ -785,7 +846,8 @@ def window_metric(x, timestamps, events, window, kind='posture', per_second=Fals
 
 
 def movement_onset_times(x, timestamps, trials, time_start=-1.0, time_stop=2.0, baseline_window=(-1.0, -0.1),
-                         thresh_factor=5.0, pooled_baseline_std=True, pre_onset_window=0.5, onset_peak_fraction=0.3):
+                         thresh_factor=5.0, pooled_baseline_std=True, pre_onset_window=0.5, onset_peak_fraction=0.3,
+                         peak_prominence=None, separate_opening_sd=None):
     """Movement onset per trial (s from start_time), as behavior_analysis_utils.find_dlc_metric_onset_times
     (defaults: beh_plotting_functions DLC onset parameters), with frames located by timestamp.
 
@@ -793,7 +855,16 @@ def movement_onset_times(x, timestamps, trials, time_start=-1.0, time_stop=2.0, 
     SD (median SD over trials if pooled_baseline_std). Search from start_time - pre_onset_window to the end of the
     response window (time_stop + artifact window), stopping at the piezo lick; onset = first threshold-crossing bout
     whose first local peak is after start_time, walked back to onset_peak_fraction x peak; fallback = peak time.
-    :param trials: DataFrame with start_time, response_window_start_time, lick_time.
+    The lick is the offset-corrected first lick, lick_time - response_window_start_time from start_time (NWB lick_time
+    is late by the artifact window, 2026-11-12; was lick_time - start_time).
+    Optional prominent peak (jaw onsets, user 2026-11-12; ibl-ai-agent ssl-dlc-jaw-onset 009-011): if peak_prominence
+    (f) is set and that first peak is below f x the trace maximum between start_time and the lick, the peak becomes the
+    first later local maximum reaching f x that maximum, walked back to onset_peak_fraction x it (never before the
+    threshold crossing of its bout). This moves onsets off a small drift / twitch that crosses the threshold first
+    (e.g. a slow pre-stimulus drift). Guard, if separate_opening_sd is set: the onset is not moved when the skipped part
+    is a separate opening (its maximum >= separate_opening_sd baseline SD, and the trace falls to <= half of it before
+    the new onset).
+    :param trials: DataFrame with start_time, response_window_start_time, lick_time (NWB trial table, uncorrected).
     :return: DataFrame (trial index) with onset, threshold, and the trial traces (time_start .. time_stop + artifact).
     """
     rate = frame_rate(timestamps)
@@ -812,7 +883,7 @@ def movement_onset_times(x, timestamps, trials, time_start=-1.0, time_stop=2.0, 
             continue
         rw = row.response_window_start_time - row.start_time
         stop = min(len(trace), t0 + int(round((time_stop + rw) / dt)))
-        lick = row.lick_time - row.start_time
+        lick = row.lick_time - row.response_window_start_time  # offset-corrected first lick, s from start_time
         if np.isfinite(lick):
             stop = min(stop, t0 + int(round(lick / dt)))
         start = max(0, t0 - int(round(pre_onset_window / dt)))
@@ -834,6 +905,9 @@ def movement_onset_times(x, timestamps, trials, time_start=-1.0, time_stop=2.0, 
                     while b > c and w[b] > onset_peak_fraction * w[p]:
                         b -= 1
                     onset = b
+                    if peak_prominence is not None and stop > t0 + 1:
+                        onset = _prominent_peak_onset(w, thr[k], t0, start, stop, b, p, peak_prominence,
+                                                      onset_peak_fraction, separate_opening_sd, thr[k] / thresh_factor)
                     break
                 i = np.searchsorted(cross, end)
         if onset is None:
@@ -843,6 +917,80 @@ def movement_onset_times(x, timestamps, trials, time_start=-1.0, time_stop=2.0, 
             onset = (t0 if stop > t0 else start) + int(np.nanargmax(seg))
         onsets[k] = grid[onset]
     return pd.DataFrame({'onset': onsets, 'threshold': thr, 'trace': list(tr)}, index=trials.index)
+
+
+def _prominent_peak_onset(w, thr, t0, start, stop, b0, p, f, frac, separate_sd, sd):
+    """movement_onset_times peak_prominence step (see there): onset index b0 from peak p, or the onset of the first
+    later local maximum reaching f x the trace maximum between t0 and stop (guarded by separate_sd)."""
+    top = np.max(w[t0:stop])
+    if w[p] >= f * top:
+        return b0
+    P = None
+    for j in range(p + 1, stop):
+        if w[j] >= f * top and w[j] >= w[j - 1] and (j + 1 >= len(w) or w[j] >= w[j + 1]):
+            P = j
+            break
+    if P is None:
+        return b0
+    b = P
+    while b > start and w[b] > frac * w[P] and w[b - 1] > thr:  # never before the threshold crossing of its bout
+        b -= 1
+    if separate_sd is not None and b > b0 + 1:
+        pk = b0 + int(np.argmax(w[b0:b]))
+        if np.min(w[pk:b + 1]) <= 0.5 * w[pk] and w[pk] >= separate_sd * sd:
+            return b0
+    return b
+
+
+# beh_plotting_functions parameters; peak_prominence + separate_opening_sd added 2026-11-12 (user; ssl-dlc-jaw-onset 011)
+JAW_ONSET_PARAMS = dict(time_start=-1.0, time_stop=2.0, baseline_window=(-1.0, -0.1), thresh_factor=5.0,
+                        pooled_baseline_std=True, pre_onset_window=0.5, onset_peak_fraction=0.3,
+                        peak_prominence=0.5, separate_opening_sd=10.0)
+
+
+def jaw_onset_times(nwb_file, trials, **params):
+    """Jaw-opening onset of every trial of one session (2026-11-10: replaces the behaviour_analysis
+    find_dlc_jaw_onset_times frame arithmetic; called by it). Side camera only, with its own timestamps:
+    load_dlc (mm, jaw reference fixed where the converter put it at the image origin) + clean_series('jaw_distance')
+    and ('jaw_velocity') (default cleaning, jaw never gated by likelihood), movement_onset_times with JAW_ONSET_PARAMS
+    unless overridden. Sessions whose side video is excluded (data_utils.VIDEO_EXCLUDED_SESSIONS) or without side DLC
+    return None.
+    :param nwb_file: NWB file of the session.
+    :param trials: DataFrame with start_time, response_window_start_time, lick_time (one session).
+    :return: copy of `trials` with threshold, freq (Hz, sampling of the traces), jaw_dlc_pos and jaw_dlc_vel (baseline-
+        subtracted traces from time_start to time_stop + artifact window, one per trial), jaw_dlc_onset (s from
+        start_time) and piezo_lick_time (offset-corrected first lick from start_time: lick_time -
+        response_window_start_time; was lick_time - start_time before 2026-11-12), the columns of the behaviour_analysis
+        pkl.
+    """
+    p = dict(JAW_ONSET_PARAMS, **params)
+    session_id = os.path.splitext(os.path.basename(str(nwb_file)))[0]
+    try:
+        from ephys_utilities.helpers.data_utils import VIDEO_EXCLUDED_SESSIONS
+    except ImportError:
+        VIDEO_EXCLUDED_SESSIONS = {}
+    if 'side' in VIDEO_EXCLUDED_SESSIONS.get(session_id, ((), ''))[0]:
+        return None
+    views = load_dlc(nwb_file, views=('side',))
+    if 'side' not in views or 'jaw_distance' not in views['side'].data:
+        return None
+    side = views['side']
+    pos, _ = clean_series(side, 'jaw_distance')
+    vel, _ = clean_series(side, 'jaw_velocity')
+    res = movement_onset_times(pos, side.timestamps, trials, **p)
+    artifact = np.round(np.nanmean(trials['response_window_start_time'].to_numpy() - trials['start_time'].to_numpy()), 1)
+    dt = 1 / frame_rate(side.timestamps)
+    starts = trials['start_time'].to_numpy()
+    _, v = peth(vel, side.timestamps, starts, (p['time_start'], p['time_stop'] + artifact), dt=dt)
+    _, vb = peth(vel, side.timestamps, starts, p['baseline_window'], dt=dt)
+    out = trials.copy()
+    out['threshold'] = res['threshold'].to_numpy()
+    out['freq'] = 1 / dt  # sampling rate of the jaw_dlc_pos / jaw_dlc_vel traces (grid step dt)
+    out['jaw_dlc_pos'] = list(res['trace'].to_numpy())
+    out['jaw_dlc_vel'] = list(v - np.nanmean(vb, 1)[:, None])
+    out['jaw_dlc_onset'] = res['onset'].to_numpy()
+    out['piezo_lick_time'] = (trials['lick_time'] - trials['response_window_start_time']).to_numpy()
+    return out
 
 
 # ---------------------------------

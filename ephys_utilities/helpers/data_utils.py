@@ -216,19 +216,48 @@ def keep_active_from_whisker_onset(trial_df):
 
 
 
-def keep_video_mice(data_df):
-    print('Filtering for mice with valid video data...')
-    mice_no_video = ['AB080','AB082','AB085', 'AB155',
-                     'MH065']
-    data_df = data_df[~data_df['mouse_id'].isin(mice_no_video)]
-    return data_df
+# Sessions without usable video / DLC, per camera view (side, top). Built from the NWB_ks4 content of every ephys-type
+# session (2026-11-06: jaw_angle / whisker_angle series present in processing/behavior/BehavioralTimeSeries) and from the
+# unresolved camera-pulse pairings of the NWB review (ibl-ai-agent skills/ssl-valid-data/references/
+# nwb_session_exceptions.md). AB085_20231005 (start-aligned, frames after the last pulse have no timestamp) and
+# AB155_20250208 (joined runs, DLC of both parts) are usable.
+VIDEO_EXCLUDED_SESSIONS = {
+    # no DLC / camera not saved
+    'AB077_20230531_143839': (('side', 'top'), 'no DLC in the NWB'),
+    'AB080_20230622_152205': (('side', 'top'), 'no DLC in the NWB'),
+    'AB082_20230630_101353': (('top',), 'top camera never saved'),
+    'AB105_20240314_115206': (('top',), 'no top DLC in the NWB'),
+    'AB135_20241111_172907': (('side', 'top'), 'no DLC in the NWB'),
+    'MH019_20250306_121844': (('side', 'top'), 'no DLC in the NWB'),
+    'MH064_20260117_105034': (('side',), 'side camera never saved'),
+    'MH065_20260115_163926': (('side', 'top'), 'no DLC in the NWB'),
+    # DLC present but frames cannot be paired with the camera pulses
+    'MH064_20260114_102210': (('side', 'top'), 'video 72,191 frames longer than pulses; pairing breaks in the last third'),
+    'MH065_20260114_154021': (('side', 'top'), 'video matches neither camera pulse run'),
+    'MH006_20250123_131233': (('side', 'top'), 'DLC / video length != pulses, no run matches'),
+    'MH020_20250304_161732': (('top',), 'top DLC / video length != pulses, no run matches'),
+    'MH028_20250503_112316': (('top',), 'top video probably tracked with the side model (side DLC end-aligned in the '
+                              'NWB reconverted 2026-11-09)'),
+}
+
+
+def keep_video_mice(data_df, views=('side', 'top')):
+    """Drop sessions without usable video / DLC for any of `views` (VIDEO_EXCLUDED_SESSIONS). Needs session_id."""
+    print('Filtering for sessions with valid video data...')
+    bad = [s for s, (missing, _) in VIDEO_EXCLUDED_SESSIONS.items() if set(missing) & set(views)]
+    drop = data_df['session_id'].isin(bad)
+    if drop.any():
+        print(f'Excluding {data_df.loc[drop, "session_id"].nunique()} sessions without usable {"/".join(views)} video')
+    return data_df[~drop]
+
+
+keep_video_data = keep_video_mice
 
 # Units excluded from passive (pre vs post) analyses, per session and probe (imec id).
 # AB155 day 0: joined session (runs g0 + g1 sorted together, passive post recorded ~900 s after the end of the active
 # block). On imec4 many units collapse or change at the junction (tissue / waveform change during the gap, not drift;
 # not caught by presence / coverage / drift-shift test): passive pre and passive post are not the same units.
-# Takes effect once the joined AB155 NWB (with passive post) replaces the pre-only one and AB155 is removed from the
-# mouse-level exclusion below.
+# In effect since the joined AB155 NWB (with passive post) replaced the pre-only one in NWB_ks4 (2026-11-06).
 PASSIVE_EXCLUDED_PROBES = {
     'AB155_20250208_175103': [4],
 }
@@ -266,9 +295,9 @@ def keep_passive_mice(data_df):
         if m.startswith('AB'):
             try:
                 if int(m[2:]) >= 116:
-                    # AB155: pre-only in the current NWB; remove from this list once the joined NWB (passive post
-                    # included) is in place -- its imec4 units are then excluded by keep_passive_units
-                    if m not in ['AB144', 'AB155']:
+                    # AB155: joined NWB with passive post since 2026-11-06; its imec4 units are excluded by
+                    # keep_passive_units
+                    if m not in ['AB144']:
                         passive_mouse_ids.append(m)
             except ValueError:
                 continue  # skip if name is wrong
