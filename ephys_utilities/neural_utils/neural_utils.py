@@ -378,23 +378,20 @@ def compute_fano_factor_from_peth(peth, time_start, time_stop):
 
 def compute_baseline_from_spike_train(spike_times, event_times, bas_start, bas_stop):
     """
-    Computes baseline firing rate for a unitspike train.
+    Computes baseline firing rate for a unit spike train, averaged over events.
     :param spike_times:  Spike times in seconds.
     :param event_times:  Stimulus times in seconds.
     :param bas_start: Start of baseline time window.
     :param bas_stop: End of baseline time window.
-    :return: Baseline firing rate, in Hz.
+    :return: Baseline firing rate, in Hz (NaN if there are no events).
     """
-
-    # Get all spikes in baseline window
-    baseline_spikes = []
-    for event in event_times:
-        bas_spikes = spike_times[(spike_times >= event + bas_start) & (spike_times < event + bas_stop)]
-        baseline_spikes.append(bas_spikes)
-    # Calculate baseline firing rate
-    baseline_rate = len(baseline_spikes) / (bas_stop - bas_start)
-
-    return baseline_rate
+    spike_times = np.sort(np.asarray(spike_times, dtype=float))
+    event_times = np.asarray(event_times, dtype=float)
+    if len(event_times) == 0:
+        return np.nan
+    n_spikes = (np.searchsorted(spike_times, event_times + bas_stop, side='left')
+                - np.searchsorted(spike_times, event_times + bas_start, side='left')).sum()
+    return n_spikes / (len(event_times) * (bas_stop - bas_start))
 
 
 
