@@ -189,8 +189,10 @@ def handle_bfd_barrels(region):
     return re.sub(r'SSp-bfd-[A-Za-z0-9]+', 'SSp-bfd', region) if "SSp-bfd" in region else region
 
 def handle_ssp_bfd(region, row=None):
-    """SSp-bfd barrels -> SSp-bfd for wS1-targeted probes."""
-    if 'SSp-bfd' in region and row['target_region'] in ['wS1']:
+    """SSp-bfd barrels (barrel-field atlases, e.g. SSp-bfd-D3) -> SSp-bfd on every probe. Was limited to wS1-targeted
+    probes, which left barrel-subfield labels (area group 'Other') on other probes' histology tracks; NWB units are not
+    affected (their atlas has no barrel subfields). Runs before handle_ppc, so PPC-probe barrels still become PPC."""
+    if 'SSp-bfd' in region:
         return handle_bfd_barrels(region)
     else:
         return region
