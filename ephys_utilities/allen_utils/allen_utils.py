@@ -228,16 +228,19 @@ def handle_mpfc(region, row=None):
         return region
 
 def handle_ppc(region, row=None):
-    """PPC subregions -> PPC for PPC-targeted probes."""
-    pcc_areas = ['PTLp', 'VISa', 'VISrl', 'SSp-tr', 'SSp-un', 'SSp-bfd']
+    """VISrl -> PPC on every probe (posterior parietal in the Allen CCF 2017). On PPC-targeted probes, PPC subregions and
+    neighbouring areas -> PPC, including SSp-bfd (user 2026-11-17: blurry PPC / barrel-field boundary)."""
+    if region == 'VISrl':
+        return 'PPC'
+    pcc_areas = ['PTLp', 'VISa', 'SSp-tr', 'SSp-un', 'SSp-bfd']
     if region in pcc_areas and row['target_region']=='PPC':
         return 'PPC'
     else:
         return region
 
 def handle_v1(region, row=None):
-    """Visual areas -> V1."""
-    v1_areas = ['VIS', 'VISp', 'VISal', 'VISl', 'VISpm', 'VISam', 'VISpl', 'VISli', 'VISpor', 'VISrl']
+    """Visual areas -> V1 (VISrl is PPC, see handle_ppc)."""
+    v1_areas = ['VIS', 'VISp', 'VISal', 'VISl', 'VISpm', 'VISam', 'VISpl', 'VISli', 'VISpor']
     if region in v1_areas:
         return 'V1'
     else:
