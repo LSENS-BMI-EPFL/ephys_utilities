@@ -604,26 +604,14 @@ def compute_physical_coordinates_from_df(df, target_coords):
 
 
 def create_bregma_centric_coords_from_ccf(df):
-    """Add bregma-centric 'ap', 'ml', 'dv' (um) from BrainGlobe CCF coordinates (IBL bregma)."""
-    df[['ccf_ap', 'ccf_ml', 'ccf_dv']] = df[['ccf_ap', 'ccf_ml', 'ccf_dv']].astype(float)
+    """Add bregma-centric 'ap', 'ml', 'dv' (um, IBL bregma) from the atlas-space CCF coordinates
+    ccf_atlas_ap/ml/dv, the ones the ccf_atlas_acronym labels come from (ccf_ap/ml/dv are a different space)."""
+    df[['ccf_atlas_ap', 'ccf_atlas_ml', 'ccf_atlas_dv']] = df[['ccf_atlas_ap', 'ccf_atlas_ml', 'ccf_atlas_dv']].astype(float)
 
     ibl_bregma_coords = dict(ap=5400, ml=5739, dv=332)
-
-    def func_to_ml(row):
-        to_ml = lambda x: x - ibl_bregma_coords['ml']
-        return to_ml(row['ccf_ml'])
-
-    def func_to_ap(row):
-        to_ap = lambda x: -x + ibl_bregma_coords['ap'] # AP positive is anterior relative to bregma
-        return to_ap(row['ccf_ap'])
-
-    def func_to_dv(row):
-        to_dv = lambda x: x - ibl_bregma_coords['dv']
-        return to_dv(row['ccf_dv'])
-
-    df['ap'] = df.apply(func_to_ap, axis=1)
-    df['ml'] = df.apply(func_to_ml, axis=1)
-    df['dv'] = df.apply(func_to_dv, axis=1)
+    df['ap'] = ibl_bregma_coords['ap'] - df['ccf_atlas_ap']  # AP positive is anterior relative to bregma
+    df['ml'] = df['ccf_atlas_ml'] - ibl_bregma_coords['ml']
+    df['dv'] = df['ccf_atlas_dv'] - ibl_bregma_coords['dv']
 
     return df
 
@@ -652,7 +640,7 @@ def create_areas_subdivisions(df, verbose=False):
     target_region_map = {
         'tjM1': 'MO-tjM1',
         'ALM': 'MO-ALM',
-        'OFC': 'MO-ALM',
+        # OFC-target probes: their MO units (anterior-medial MOs, mostly momap MO13) are not ALM -> left as MOs/MOp
         'wS2': 'MO-wM1', # TODO: DEAL WITH AB127
         'DLS': 'MO-wM1', #TODO: DEAL WITH AB156
         'wM1': 'MO-wM1',
@@ -764,14 +752,15 @@ def create_thalamic_groupings(df, verbose=False):
 def process_allen_labels(df, split_merge_areas=False):
     """Add area_acronym_custom, layer, bregma coordinates, area_group and isocortex_group."""
 
-    required_cols = ['target_region', 'ccf_atlas_acronym', 'ccf_atlas_parent_acronym', 'ccf_ap', 'ccf_ml', 'ccf_dv', 'mouse_id']
+    required_cols = ['target_region', 'ccf_atlas_acronym', 'ccf_atlas_parent_acronym', 'ccf_atlas_ap', 'ccf_atlas_ml',
+                     'ccf_atlas_dv', 'mouse_id']
     if not all(col in df.columns for col in required_cols):
         missing_cols = [col for col in required_cols if col not in df.columns]
         print(f'allen_utils.process_allen_labels: Warning - missing required columns for processing. Available columns: {df.columns}, Missing: {missing_cols}')
         text = f"Missing required columns for processing Allen labels: {', '.join(missing_cols)}. Available columns: {', '.join(df.columns)}"
         raise ValueError(text)
 
-    df = df[~df['ccf_atlas_acronym'].isin(get_excluded_areas())]
+    df = df[~df['ccf_atlas_acronym'].isin(get_excluded_areas())].copy()
 
     df['ccf_atlas_acronym'] = df['ccf_atlas_acronym'].apply(lambda x: str(x))
     rows_with_nan = df.loc[
@@ -1057,4 +1046,79 @@ def merge_hierarchy_columns_from_gao(df):
           f"Mean nearest-neighbor distance = {distances.mean():.1f}, "
           f"max = {distances.max():.1f} (same units as ccf_atlas_ml/dv/ap).")
 
+    return df
+
+
+MOMAP_DIR = pathlib.Path(os.environ.get('MOMAP_DIR', '/mnt/lsens-analysis/Axel_Bisi/atlases/allen_mouse_momap'))
+
+
+def load_momap_atlas(momap_dir=None):
+    """Falasconi & Kanodia et al. 2026 (Cell) motor-cortex modules (allen_mouse_momap, 10 um CCFv3, asr).
+    Returns (annotation memmap, {label id: area-level acronym}); layer labels are collapsed to their module (MO1..MO16)
+    or Allen area. Files from https://zenodo.org/records/21104472 (annotation.tiff, structures_list.json)."""
+    import tifffile
+    momap_dir = pathlib.Path(momap_dir) if momap_dir is not None else MOMAP_DIR
+    if not (momap_dir / 'annotation.tiff').is_file():
+        raise FileNotFoundError(f'momap annotation not found in {momap_dir}. Get files_momap.zip from '
+                                f'https://zenodo.org/records/21104472 (momap_bgatlas/annotation.tiff, structures_list.json).')
+    annotation = tifffile.memmap(momap_dir / 'annotation.tiff', mode='r')
+    structures = pd.DataFrame(json.load(open(momap_dir / 'structures_list.json')))
+    acronym = dict(zip(structures['id'], structures['acronym']))
+    name = dict(zip(structures['id'], structures['name']))
+    id_to_area = {}
+    for sid, path in zip(structures['id'], structures['structure_id_path']):
+        id_to_area[sid] = next((acronym[a] for a in reversed(path) if 'layer' not in str(name.get(a, '')).lower()), None)
+    return annotation, id_to_area
+
+
+def merge_mo_modules_from_momap(df, max_dist_um=100, momap_dir=None):
+    """Motor-cortex module (Falasconi & Kanodia et al. 2026) of each neuron, looked up at its ccf_atlas_ap/dv/ml voxel.
+    Adds 'momap_area' (module or Allen area at the voxel), 'mo_module' (MO1..MO16; for neurons outside a module, the
+    nearest module if within max_dist_um, else NaN) and 'mo_module_dist_um' (0 inside a module)."""
+    from scipy.ndimage import distance_transform_edt
+
+    annotation, id_to_area = load_momap_atlas(momap_dir)
+    df = df.copy()
+    df['momap_area'], df['mo_module'], df['mo_module_dist_um'] = None, np.nan, np.nan
+
+    coords = df[['ccf_atlas_ap', 'ccf_atlas_dv', 'ccf_atlas_ml']].astype(float)
+    valid = coords.notna().all(axis=1).to_numpy()
+    if not valid.any():
+        print('[momap] No neurons with ccf_atlas coordinates; skipping.')
+        return df
+
+    shape = np.array(annotation.shape)
+    vox = np.clip(np.round(coords.to_numpy()[valid] / 10).astype(int), 0, shape - 1)
+    labels = np.asarray(annotation[vox[:, 0], vox[:, 1], vox[:, 2]])
+    areas = np.array([id_to_area.get(v) if v else None for v in labels], dtype=object)
+    is_module = np.array([a is not None and re.fullmatch(r'MO\d+', a) is not None for a in areas])
+
+    module = np.where(is_module, areas, None).astype(object)
+    dist = np.where(is_module, 0.0, np.nan)
+
+    # neurons outside a module: nearest module voxel within max_dist_um (distance transform on a crop around them)
+    out = np.flatnonzero(~is_module)
+    if len(out):
+        pad = int(np.ceil(max_dist_um / 10)) + 1
+        lo = np.maximum(vox[out].min(axis=0) - pad, 0)
+        hi = np.minimum(vox[out].max(axis=0) + pad + 1, shape)
+        block = np.asarray(annotation[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]])
+        module_ids = [i for i, a in id_to_area.items() if a is not None and re.fullmatch(r'MO\d+', a)]
+        in_module = np.isin(block, module_ids)
+        if in_module.any():
+            d, idx = distance_transform_edt(~in_module, return_indices=True)
+            loc = tuple((vox[out] - lo).T)
+            near = block[idx[0][loc], idx[1][loc], idx[2][loc]]
+            d_um = d[loc] * 10
+            ok = d_um <= max_dist_um
+            module[out[ok]] = [id_to_area[v] for v in near[ok]]
+            dist[out] = d_um
+
+    df.loc[valid, 'momap_area'] = areas
+    df.loc[valid, 'mo_module'] = module
+    df.loc[valid, 'mo_module_dist_um'] = dist
+    n_mod, n_near = int(is_module.sum()), int(pd.notna(module).sum() - is_module.sum())
+    print(f'[momap] {n_mod}/{valid.sum()} neurons inside a motor-cortex module, {n_near} more assigned to the nearest '
+          f'module within {max_dist_um} um, {valid.sum() - n_mod - n_near} without a module '
+          f'({(~valid).sum()} without ccf_atlas coordinates).')
     return df
