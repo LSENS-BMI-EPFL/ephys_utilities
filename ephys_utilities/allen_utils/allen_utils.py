@@ -502,32 +502,21 @@ def create_legend_figure(color_dict, rectangles=True, title='Legend'):
 
     return fig
 
+ISOCORTEX_AREA_GROUPS = ['Motor areas', 'Frontal areas', 'Somatosensory-orofacial', 'Somatosensory-body',
+                         'Somatosensory-whisker', 'Auditory areas', 'Retrosplenial areas', 'Posterior parietal areas',
+                         'Visual areas', 'Insular areas']
+
+
 def get_isocortex_mapping():
-    """Isocortex vs non-isocortex areas (for RS/FS distinctions)."""
-    isocortex_groups = {
-        'Isocortex': [
-            'MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2',
-            'mPFC', 'FRP', 'ACA', 'PL', 'ORB',
-            'SSp-bfd', 'SSs', 'SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll',
-            'SSp-tr', 'SSp-un', 'VISC', 'GU', 'AI',
-            'AUD', 'TEa',
-            'RSP',
-            'PPC', 'VIS', 'VISa', 'VISp', 'VISam', 'VISl',
-            'VISpm', 'VISrl', 'VISal'
-        ],
-        'Non-isocortex': [
-            'CA1', 'CA2', 'CA3', 'DG', 'HPF',
-            'CP', 'DMS', 'DLS', 'TS', 'STR', 'VS', 'ACB', 'FS', 'LS',
-            'SF', 'GPe', 'GPi', 'PAL', 'MS',
-            'TH', 'VPL', 'VPM', 'VP', 'LD', 'RT', 'PO', 'LGN', 'LP',
-            'ATN', 'LAT', 'MGN', 'MED', 'MTN', 'ILM', 'HA', 'CL',
-            'SCs', 'SCm', 'MB', 'VTA', 'MRN', 'PAG', 'RN', 'SNr', 'APN',
-            'Pons', 'MY',
-            'AON', 'OLF', 'PIR',
-            'BLA', 'BLAa', 'LA', 'CEA', 'MEA', 'HY', 'ZI'
-        ]
-    }
-    return isocortex_groups
+    """Isocortex vs non-isocortex areas (for RS/FS distinctions), both built from get_custom_area_groups():
+    isocortex = areas of the cortical groups (ISOCORTEX_AREA_GROUPS), non-isocortex = areas of every other group, so
+    merged labels (V1, SSp-oro, SSp-body, PTLp, SUB, CLA, ...) are never left out as 'Other'."""
+    groups = get_custom_area_groups()
+    isocortex = list(dict.fromkeys(a for g in ISOCORTEX_AREA_GROUPS for a in groups[g]))
+    non_isocortex = list(dict.fromkeys(a for g, areas in groups.items() if g not in ISOCORTEX_AREA_GROUPS
+                                       for a in areas if a not in isocortex))
+    non_isocortex += [a for a in ['LS', 'BLAa', 'CEA', 'MEA'] if a not in non_isocortex]  # kept from the previous list
+    return {'Isocortex': isocortex, 'Non-isocortex': non_isocortex}
 
 def apply_target_region_filters(peth_table, area):
     """Units of a target region that lie in that region's expected areas."""
@@ -641,10 +630,7 @@ def create_areas_subdivisions(df, verbose=False):
         'tjM1': 'MO-tjM1',
         'ALM': 'MO-ALM',
         # OFC-target probes: their MO units (anterior-medial MOs, mostly momap MO13) are not ALM -> left as MOs/MOp
-        'wS2': 'MO-wM1', # TODO: DEAL WITH AB127
-        'DLS': 'MO-wM1', #TODO: DEAL WITH AB156
         'wM1': 'MO-wM1',
-        'PPC': 'MO-wM1',
         'wM2': 'MO-wM2'
     }
 
@@ -1049,7 +1035,9 @@ def merge_hierarchy_columns_from_gao(df):
     return df
 
 
-MOMAP_DIR = pathlib.Path(os.environ.get('MOMAP_DIR', '/mnt/lsens-analysis/Axel_Bisi/atlases/allen_mouse_momap'))
+MOMAP_DIR = pathlib.Path(os.environ.get(
+    'MOMAP_DIR', r'M:\analysis\Axel_Bisi\atlases\allen_mouse_momap' if os.name == 'nt'
+    else '/mnt/lsens-analysis/Axel_Bisi/atlases/allen_mouse_momap'))
 
 
 def load_momap_atlas(momap_dir=None):

@@ -586,9 +586,9 @@ def _load_one_track(record: dict) -> list[dict]:
             'target_region': record['target_region'],
             'day_of_recording': record.get('day_of_recording', 'unknown'),
             # Raw CCF voxel-µm — required by process_allen_labels
-            'ccf_ap':        float(ap_ccf[i]),
-            'ccf_ml':        float(ml_ccf[i]),
-            'ccf_dv':        float(dv_ccf[i]),
+            'ccf_atlas_ap':  float(ap_ccf[i]),
+            'ccf_atlas_ml':  float(ml_ccf[i]),
+            'ccf_atlas_dv':  float(dv_ccf[i]),
             # atlas-space (ASR µm) — used for 3D scatter position
             'a_um':          float(a_um[i]),
             's_um':          float(s_um[i]),

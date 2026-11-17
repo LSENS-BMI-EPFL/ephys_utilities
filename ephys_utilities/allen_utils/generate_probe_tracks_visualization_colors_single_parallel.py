@@ -6,6 +6,8 @@
 @time: 3/3/2025 12:53 PM
 """
 import os
+import io
+import contextlib
 import logging
 import hashlib
 import random
@@ -20,6 +22,13 @@ import brainrender
 from brainrender import Scene
 from brainrender.actors import Points
 from brainrender.video import VideoMaker
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+try:
+    from ephys_utilities.allen_utils import allen_utils
+except ImportError:  # run from inside the allen_utils folder
+    import allen_utils
 
 logging.basicConfig(level=logging.WARNING, force=True)
 log = logging.getLogger(__name__)
@@ -53,6 +62,11 @@ EXPERIMENTER_CMAP = {
 }
 
 DEFAULT_AREA_COLOR = '#888888'
+UNASSIGNED_AREA_COLOR = '#d9d9d9'  # area_group mode: fibre tracts, ventricles, outside brain, 'Other'
+
+# area_group mode: per-probe labels (cached across views), and what the current figure contains
+_AREA_LABEL_CACHE = {}
+_AREA_ROWS = []
 
 
 def get_output_session_folder(params: dict, m_name: str, session_folder: Path) -> Path:
@@ -65,7 +79,7 @@ def get_output_session_folder(params: dict, m_name: str, session_folder: Path) -
     consistent with wherever that share is mounted. Any missing folders are created
     by the caller via mkdir.
     """
-    analysis_root = Path(params['input_data_path_axel']).parent.parent  # .../analysis
+    analysis_root = resolve_path(params['input_data_path_axel']).parent.parent  # .../analysis
     analyzer_data_root = analysis_root / params['analyzer'] / 'data'
     return analyzer_data_root / m_name / session_folder.name
 
@@ -167,6 +181,84 @@ def add_probe_colored_by_allen_area(scene, probe_track, row_acronyms, probe_name
             start = end
 
 
+def get_row_area_labels(atlas, probe_track, target_region, mouse_id, cache_key=None):
+    """
+    Label every track point the same way as the units: CCF acronym from the atlas, its parent acronym, the probe
+    target region and the point coordinates go through allen_utils.process_allen_labels (area_acronym_custom with
+    context handlers and coordinate-based subdivisions, then area_group). Points in excluded structures (fibre
+    tracts, ventricles, root / outside the brain) come back as None.
+    Returns (area_acronym_custom, area_group) arrays, one entry per track point.
+    """
+    if cache_key is not None and cache_key in _AREA_LABEL_CACHE:
+        return _AREA_LABEL_CACHE[cache_key]
+    acronyms = get_row_acronyms_from_coords(atlas, probe_track)
+
+    def _parent(acr):
+        try:
+            path = atlas.structures[acr]['structure_id_path']
+            return atlas.structures[path[-2]]['acronym'] if len(path) > 1 else acr
+        except KeyError:
+            return acr
+    parents = {a: _parent(a) for a in set(acronyms)}
+    df = pd.DataFrame({
+        '_row': np.arange(len(probe_track)),
+        'cluster_id': np.arange(len(probe_track)),  # process_allen_labels reports NaN rows by cluster_id
+        'ccf_atlas_acronym': acronyms,
+        'ccf_atlas_parent_acronym': [parents[a] for a in acronyms],
+        'target_region': target_region,
+        'ccf_atlas_ap': probe_track[:, 0], 'ccf_atlas_dv': probe_track[:, 1], 'ccf_atlas_ml': probe_track[:, 2],  # atlas order AP, DV, ML
+        'mouse_id': mouse_id,
+    })
+    with contextlib.redirect_stdout(io.StringIO()):  # process_allen_labels prints per-call warnings
+        lab = allen_utils.process_allen_labels(df, split_merge_areas=True)
+    lab = lab.set_index('_row').reindex(np.arange(len(probe_track)))
+    out = (lab['area_acronym_custom'].to_numpy(dtype=object), lab['area_group'].to_numpy(dtype=object))
+    if cache_key is not None:
+        _AREA_LABEL_CACHE[cache_key] = out
+    return out
+
+
+def add_probe_colored_by_area_group(scene, probe_track, area_groups, probe_name):
+    """
+    Split a probe track into contiguous runs of the same area group and add one Points actor per run, coloured with
+    allen_utils.get_custom_area_groups_colors(); points without a group (or 'Other') get UNASSIGNED_AREA_COLOR.
+    """
+    group_colors = allen_utils.get_custom_area_groups_colors()
+    colors = [group_colors.get(g, UNASSIGNED_AREA_COLOR) if isinstance(g, str) and g != 'Other'
+              else UNASSIGNED_AREA_COLOR for g in area_groups]
+    n = len(colors)
+    start = 0
+    for end in range(1, n + 1):
+        if end == n or colors[end] != colors[start]:
+            seg = probe_track[start:end]
+            if len(seg) > 0:
+                scene.add(Points(seg, name=f"{probe_name}_{area_groups[start]}",
+                                 colors=colors[start], radius=18, alpha=1.0, res=15))
+            start = end
+
+
+def save_area_group_legend_and_table(output_folder: Path, fig_stem: str) -> None:
+    """area_group mode: legend of the groups present (default area_group order, + unassigned) and a csv with the
+    number of track points per probe, fine area and area group; both named after the figure."""
+    if not _AREA_ROWS:
+        return
+    table = pd.DataFrame(_AREA_ROWS).fillna({'area_acronym_custom': 'unassigned', 'area_group': 'unassigned'})
+    table = (table.groupby(['mouse_id', 'session', 'probe', 'target_region', 'area_group', 'area_acronym_custom'])
+             .size().rename('n_track_points').reset_index())
+    table.to_csv(output_folder / f"{fig_stem}_area_points.csv", index=False)
+    present = set(table['area_group'])
+    group_colors = allen_utils.get_custom_area_groups_colors()
+    legend = {g: group_colors[g] for g in allen_utils.get_area_group_custom_order()
+              if g in present and g in group_colors}
+    legend['Other / no area'] = UNASSIGNED_AREA_COLOR
+    with plt.rc_context({'font.family': 'sans-serif', 'font.sans-serif': ['Arial'], 'svg.fonttype': 'none',
+                         'pdf.fonttype': 42}):
+        fig = allen_utils.create_legend_figure(legend, title='Area group')
+        for ext in ('png', 'svg'):
+            fig.savefig(output_folder / f"{fig_stem}_legend.{ext}", dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
+
 def add_single_probe(scene, data_folder, probe_array, probe_table, probe_info, color_by, params,
                       areas_to_show, target_areas_color_dict, experimenter, allen_color_cache, base_probe_color):
     """
@@ -219,6 +311,16 @@ def add_single_probe(scene, data_folder, probe_array, probe_table, probe_info, c
         row_acronyms = get_row_acronyms_from_coords(scene.atlas, probe_track, debug=False)
         print(f"  Adding probe {probe_name}, split by Allen atlas color")
         add_probe_colored_by_allen_area(scene, probe_track, row_acronyms, probe_name, allen_color_cache)
+    elif color_by == 'area_group':
+        mouse_id = probe_info['mouse_name'].values[0]
+        cache_key = (str(probe_path), len(probe_track), params['filter_shanks'], tuple(areas_to_show or []))
+        areas, groups = get_row_area_labels(scene.atlas, probe_track, probe_target, mouse_id, cache_key=cache_key)
+        print(f"  Adding probe {probe_name}, split by area group colour")
+        add_probe_colored_by_area_group(scene, probe_track, groups, probe_name)
+        session = next((part for part in data_folder.parts if part.startswith(f"{mouse_id}_")), '')
+        _AREA_ROWS.extend({'mouse_id': mouse_id, 'session': session, 'probe': probe_name,
+                           'target_region': probe_target, 'area_acronym_custom': a, 'area_group': g}
+                          for a, g in zip(areas, groups))
     else:
         print(f"  Adding probe {probe_name} (color={probe_color})")
         scene.add(Points(probe_track, name=probe_name, colors=probe_color, radius=18, alpha=1.0, res=15))
@@ -273,8 +375,39 @@ def generate_brain_animation(scene, output_folder: Path, fig_stem: str, camera_v
     return
 
 
+NAS_MOUNTS = {r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\analysis': '/mnt/lsens-analysis',
+              r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\share_internal': '/mnt/share_internal'}
+COLOR_DIRS = {'reward_group': 'reward_group', 'target_area': 'target_area', 'experimenter': 'experimenter',
+              'area_acronym_custom': 'allen_color', 'area_group': 'area_group', 'none': 'tracks'}
+
+
+def resolve_path(path) -> Path:
+    """UNC NAS path -> the Linux mount on haas (unchanged on Windows)."""
+    path = str(path)
+    if os.name != 'nt':
+        for unc, mount in NAS_MOUNTS.items():
+            if path.startswith(unc):
+                path = mount + path[len(unc):].replace('\\', '/')
+    return Path(path)
+
+
+def day_tag(days: list) -> str:
+    """Name of a set of recording days: day0, expert_days (1-4), all_days, or days<list>."""
+    days = sorted(days)
+    if days == [0]:
+        return 'day0'
+    if days == [1, 2, 3, 4]:
+        return 'expert_days'
+    if days == [0, 1, 2, 3, 4]:
+        return 'all_days'
+    return 'days' + '-'.join(map(str, days))
+
+
 def generate_brain_visualization(params):
-    """Plot probe tracks with brainrender using the given parameters."""
+    """Plot probe tracks with brainrender using the given parameters.
+    Output: <output_folder>/tracks/3d_renders/<color scheme>/<day set>/<color>_<days>_<view>.<fmt> (+ legend / area
+    table for area_group, + rotation video if params['animate'] and the view is in params['animate_views']).
+    params['file_format'] may be a list: one scene, one screenshot per format."""
 
     color_by        = params['color_by']
     transparent     = params['transparent']
@@ -284,9 +417,20 @@ def generate_brain_visualization(params):
 
     print(f"color_by={color_by}  camera={params['camera_view']}  format={params['file_format']}  days={days}")
 
-    input_data_path_axel   = Path(params['input_data_path_axel'])
-    input_data_path_myriam = Path(params['input_data_path_myriam'])
-    output_folder_path     = Path(params['output_folder_path'])
+    input_data_path_axel   = resolve_path(params['input_data_path_axel'])
+    input_data_path_myriam = resolve_path(params['input_data_path_myriam'])
+    output_folder_path     = resolve_path(params['output_folder_path'])
+    file_formats = params['file_format'] if isinstance(params['file_format'], (list, tuple)) else [params['file_format']]
+
+    if params.get('skip_existing', False):   # skip a combination whose outputs are all on disk
+        out_dir = output_folder_path / 'tracks' / '3d_renders' / COLOR_DIRS.get(color_by, 'tracks') / day_tag(days)
+        stem = f"{COLOR_DIRS.get(color_by, 'tracks')}_{day_tag(days)}_{params['camera_view']}"
+        wanted = [out_dir / f'{stem}.{fmt}' for fmt in file_formats]
+        if params.get('animate', False) and params['camera_view'] in params.get('animate_views', [params['camera_view']]):
+            wanted.append(out_dir / f'{stem}_animation.mp4')
+        if all(w.exists() for w in wanted):
+            print(f'skip existing: {stem}')
+            return
 
     brainrender.settings.SCREENSHOT_TRANSPARENT_BACKGROUND = transparent
     probe_color = "#ebf7ff" if dark_background else "#262626"
@@ -303,11 +447,9 @@ def generate_brain_visualization(params):
     overlay_areas = params['overlay_areas'] if areas_to_show and areas_to_show != [''] else False
     label_areas   = params['label_areas']
 
-    # Output subfolder by color scheme
-    subdir = {'reward_group': 'reward_group', 'target_area': 'target_area',
-              'experimenter': 'experimenter', 'area_acronym_custom': 'allen_color',
-              'none': 'tracks'}.get(color_by, 'tracks')
-    output_folder_path = output_folder_path / subdir
+    # Output: tracks/3d_renders/<color scheme>/<day set>/
+    subdir = COLOR_DIRS.get(color_by, 'tracks')
+    output_folder_path = output_folder_path / 'tracks' / '3d_renders' / subdir / day_tag(days)
     output_folder_path.mkdir(parents=True, exist_ok=True)
 
     scene = Scene(inset=False, title="", screenshots_folder=output_folder_path, title_color='darkgrey',
@@ -315,6 +457,7 @@ def generate_brain_visualization(params):
 
     # Cache of acronym -> hex color, reused across all probes/mice in this call
     allen_color_cache = {}
+    _AREA_ROWS.clear()  # area_group mode: rows of the current figure only
 
     if overlay_areas:
         for area in areas_to_show:
@@ -323,7 +466,7 @@ def generate_brain_visualization(params):
                 scene.add_label(actor, area, size=500, color=None, radius=100, xoffset=0, yoffset=-500, zoffset=100)
 
     # Probe and mouse metadata
-    probe_info_df = pd.read_excel(params['probe_info_path'])
+    probe_info_df = pd.read_excel(resolve_path(params['probe_info_path']))
     probe_info_df = probe_info_df[probe_info_df['valid']==1]
     probe_info_df['day_of_recording'] = probe_info_df['day_of_recording'].astype(int)
     probe_info_df = probe_info_df[probe_info_df['day_of_recording'].isin(days)]
@@ -340,7 +483,7 @@ def generate_brain_visualization(params):
     else:
         target_areas_color_dict = {}
 
-    mouse_info_df = pd.read_excel(params['mouse_info_path'])
+    mouse_info_df = pd.read_excel(resolve_path(params['mouse_info_path']))
     mouse_info_df.rename(columns={'mouse_name': 'mouse_id'}, inplace=True)
     mouse_info_df = mouse_info_df[
         (mouse_info_df['exclude'] == 0) &
@@ -388,8 +531,8 @@ def generate_brain_visualization(params):
                 log.warning("  Track folder is empty: %s — skipping.", data_folder)
                 continue
 
-            probe_arrays = sorted(f for f in os.listdir(data_folder) if f.endswith('.npy') and f.startswith('imec'))
-            probe_tables = sorted(f for f in os.listdir(data_folder) if f.endswith('.csv') and f.startswith('imec'))
+            probe_arrays = sorted(f for f in os.listdir(data_folder) if f.endswith('.npy') and f.startswith('imec') and '_keep' not in f)
+            probe_tables = sorted(f for f in os.listdir(data_folder) if f.endswith('.csv') and f.startswith('imec') and '_keep' not in f)
             print(f"  {len(probe_arrays)} probe file(s) found in {data_folder}")
             n_valid_probes_for_session = probe_info_df[(probe_info_df['mouse_name'] == m_name) & (probe_info_df['date'] == date_val) & (probe_info_df['valid'] == 1)].shape[0]
             if len(probe_arrays) != n_valid_probes_for_session:
@@ -422,29 +565,27 @@ def generate_brain_visualization(params):
 
     scene.render(interactive=False, camera=camera, zoom=zoom)
 
-    # Build figure name stem (shared by screenshot and animation)
-    parts = [str_suffix]
-    if color_by != 'none':
-        parts.append(color_by)
+    # Figure name stem (shared by screenshots and animation): <color>_<days>_<view>[_options]
+    parts = [subdir, day_tag(days), cam_suffix]
+    if str_suffix != 'empty':
+        parts.append(str_suffix)
     if params['filter_shanks']:
         parts.append('filtered')
     if dark_background:
         parts.append('dark')
-    if days is not None:
-        parts.append(f'day{days}')
-    parts.append(cam_suffix)
-    if transparent:
-        parts.append('transparent')
-    if 'good' in params['learning_category'] and 'moderate' in params['learning_category']:
-        parts.append('learners')
-    fig_stem = "all_probes_in_atlas_{}".format('_'.join(parts))
-    fig_name = f"{fig_stem}.{params['file_format']}"
+    if not transparent:
+        parts.append('opaque')
+    fig_stem = '_'.join(parts)
 
     n_mice = len(set(mouse_list_sub_in_plot))
-    print(f"Saving {len(probe_arrays_total)} probes from {n_mice} mice → {output_folder_path / fig_name}")
-    scene.screenshot(name=fig_name, scale=params['scale'])
+    for fmt in file_formats:
+        fig_name = f"{fig_stem}.{fmt}"
+        print(f"Saving {len(probe_arrays_total)} probes from {n_mice} mice → {output_folder_path / fig_name}")
+        scene.screenshot(name=fig_name, scale=params['scale'])
+    if color_by == 'area_group':
+        save_area_group_legend_and_table(output_folder_path, fig_stem)
 
-    if params.get('animate', False):
+    if params.get('animate', False) and camera_view in params.get('animate_views', [camera_view]):
         generate_brain_animation(scene, output_folder_path, fig_stem, camera_view, params, camera)
 
     scene.close()
@@ -497,6 +638,30 @@ def run_combined_sweep_parallel(base_params: dict, color_by_sweep: list, camera_
                 print(f"  FAILED: {label} — {e}")
 
 
+def run_full_sweep_parallel(base_params: dict, day_sets: list, color_by_sweep: list, camera_views: list,
+                            animate_color_by: list, animate_days: list, max_workers: int = 12) -> None:
+    """One job per (day set, color scheme, camera view), all file formats from one scene; rotation video for the
+    (animate_color_by, animate_days, animate_views) jobs, which are submitted first (longest). Each worker process
+    builds its own Scene (independent VTK context; run under one Xvfb display on a headless server)."""
+    jobs = []
+    for days, color, cam in itertools.product(day_sets, color_by_sweep, camera_views):
+        jp = dict(base_params, day_of_recording=days, color_by=color, camera_view=cam)
+        jp['animate'] = color in animate_color_by and days == animate_days
+        jobs.append(jp)
+    jobs.sort(key=lambda jp: not (jp['animate'] and jp['camera_view'] in jp.get('animate_views', [])))
+    print(f'Running {len(jobs)} render jobs on {max_workers} workers...', flush=True)
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_run_combined_job, jp): jp for jp in jobs}
+        for future in as_completed(futures):
+            jp = futures[future]
+            label = f"{COLOR_DIRS.get(jp['color_by'])}/{day_tag(jp['day_of_recording'])}/{jp['camera_view']}"
+            try:
+                future.result()
+                print(f'  Done: {label}', flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f'  FAILED: {label} - {e}', flush=True)
+
+
 def _process_single_mouse_sessions(params: dict, m_name: str, mouse_probes: pd.DataFrame,
                                     target_areas_color_dict: dict) -> tuple:
     """
@@ -512,8 +677,8 @@ def _process_single_mouse_sessions(params: dict, m_name: str, mouse_probes: pd.D
     transparent     = params['transparent']
     dark_background = params['dark_background']
 
-    input_data_path_axel   = Path(params['input_data_path_axel'])
-    input_data_path_myriam = Path(params['input_data_path_myriam'])
+    input_data_path_axel   = resolve_path(params['input_data_path_axel'])
+    input_data_path_myriam = resolve_path(params['input_data_path_myriam'])
 
     brainrender.settings.SCREENSHOT_TRANSPARENT_BACKGROUND = transparent
     base_probe_color = "#ebf7ff" if dark_background else "#262626"
@@ -555,8 +720,8 @@ def _process_single_mouse_sessions(params: dict, m_name: str, mouse_probes: pd.D
             log.warning("  Track folder missing/empty: %s — skipping session.", data_folder)
             continue
         print('')
-        probe_arrays = sorted(f for f in os.listdir(data_folder) if f.endswith('.npy') and f.startswith('imec'))
-        probe_tables = sorted(f for f in os.listdir(data_folder) if f.endswith('.csv') and f.startswith('imec'))
+        probe_arrays = sorted(f for f in os.listdir(data_folder) if f.endswith('.npy') and f.startswith('imec') and '_keep' not in f)
+        probe_tables = sorted(f for f in os.listdir(data_folder) if f.endswith('.csv') and f.startswith('imec') and '_keep' not in f)
         get_probe_id = lambda fname: fname.split('_')[0][-1]  # e.g. "imec0_mapped.npy" → "0"
 
         # Save into the session's own folder, e.g.
@@ -625,7 +790,7 @@ def generate_per_session_visualizations(params: dict, parallel: bool = False, ma
 
     print(f"[per-session] color_by={color_by}  camera={params['camera_view']}  format={params['file_format']}  days={days}")
 
-    probe_info_df = pd.read_excel(params['probe_info_path'])
+    probe_info_df = pd.read_excel(resolve_path(params['probe_info_path']))
     probe_info_df = probe_info_df[probe_info_df['valid'] == 1]
     probe_info_df['day_of_recording'] = probe_info_df['day_of_recording'].astype(int)
     probe_info_df = probe_info_df[probe_info_df['day_of_recording'].isin(days)]
@@ -641,7 +806,7 @@ def generate_per_session_visualizations(params: dict, parallel: bool = False, ma
     else:
         target_areas_color_dict = {}
 
-    mouse_info_df = pd.read_excel(params['mouse_info_path'])
+    mouse_info_df = pd.read_excel(resolve_path(params['mouse_info_path']))
     mouse_info_df.rename(columns={'mouse_name': 'mouse_id'}, inplace=True)
     mouse_info_df = mouse_info_df[mouse_info_df['exclude'] == 0]
     mouse_info_df = mouse_info_df[mouse_info_df.learning_category.isin(params['learning_category'])]
@@ -692,7 +857,7 @@ params = {
     'probe_info_path': r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\share_internal\Axel_Bisi_Share\dataset_info\joint_probe_insertion_info.xlsx',
     'mouse_info_path': r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\share_internal\Axel_Bisi_Share\dataset_info\joint_mouse_reference_weight.xlsx',
     'output_folder_path': r'\\sv-nas1.rcp.epfl.ch\Petersen-Lab\analysis\Axel_Bisi\combined_results_ks4\anatomy',
-    'color_by': 'reward_group',  # 'reward_group', 'target_area', 'experimenter', 'area_acronym_custom', 'none'
+    'color_by': 'reward_group',  # 'reward_group', 'target_area', 'experimenter', 'area_acronym_custom' (Allen colours), 'area_group' (allen_utils area-group colours), 'none'
     'target_cmap': 'custom_cmap',  # 'auto' or 'custom_cmap'
     'transparent': True,
     'dark_background': False,
@@ -752,23 +917,30 @@ params = {
 
 if __name__ == "__main__":
     mode     = 'combined'  # 'combined' (one figure across all mice/sessions) or 'per_session'
-    parallel = False        # run jobs across multiple worker processes
-    max_workers = 1     # None = cpu_count() - 1; lower this if you hit GPU/memory issues
+    parallel = True         # run jobs across multiple worker processes
+    max_workers = 12    # None = cpu_count() - 1; lower this if you hit GPU/memory issues
 
     if mode == 'combined':
-        color_by_sweep = ['none', 'area_acronym_custom', 'reward_group', 'target_area']
+        color_by_sweep = ['none', 'area_acronym_custom', 'area_group', 'reward_group', 'target_area']
         camera_views   = ['sagittal', 'top', 'angled', 'frontal']
-        file_formats   = ['png', 'svg', 'pdf']
+        day_sets       = [[0], [1, 2, 3, 4], [0, 1, 2, 3, 4]]
+        params['file_format'] = ['png', 'pdf']          # one scene, both formats
+        params['skip_existing'] = True                  # rerun only missing combinations
+        params['animate_views'] = ['angled']
+        animate_color_by = ['area_group', 'target_area', 'reward_group']   # rotation snippets (angled view, all days)
 
         if parallel:
-            run_combined_sweep_parallel(params, color_by_sweep, camera_views, file_formats, max_workers=max_workers)
+            run_full_sweep_parallel(params, day_sets, color_by_sweep, camera_views, animate_color_by,
+                                    animate_days=[0, 1, 2, 3, 4], max_workers=max_workers)
         else:
-            for color in color_by_sweep:
-                params['color_by'] = color
-                for camera_view in camera_views:
-                    params['camera_view'] = camera_view
-                    for file_format in file_formats:
-                        params['file_format'] = file_format
+            for days in day_sets:
+                params['day_of_recording'] = days
+                for color in color_by_sweep:
+                    params['color_by'] = color
+                    params['animate'] = color in animate_color_by and days == [0, 1, 2, 3, 4]
+                    params['animate_views'] = ['angled']
+                    for camera_view in camera_views:
+                        params['camera_view'] = camera_view
                         generate_brain_visualization(params)
 
     else:
