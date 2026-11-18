@@ -206,16 +206,18 @@ def handle_ssp_whisker(region, row=None):
         return region
 
 def handle_ssp_oro(region, row=None):
-    """SSp-m, SSp-n, SSp-un -> SSp-oro."""
-    ssp_orofacial = ['SSp-m', 'SSp-n', 'SSp-un']
+    """SSp-m, SSp-n -> SSp-oro (SSp-un is body, see handle_ssp_body)."""
+    ssp_orofacial = ['SSp-m', 'SSp-n']
     if region in ssp_orofacial:
         return 'SSp-oro'
     else:
         return region
 
 def handle_ssp_body(region, row=None):
-    """SSp-ul, SSp-ll, SSp-tr -> SSp-body."""
-    ssp_body = ['SSp-ul', 'SSp-ll', 'SSp-tr']
+    """SSp-ul, SSp-ll, SSp-tr, SSp-un -> SSp-body (user 2026-11-18: SSp-un lies next to SSp-ul/ll and responds
+    body-like, not orofacial; review combined_results_ks4/ssl-ssp-un-review). On PPC-targeted probes SSp-tr / SSp-un
+    are PPC instead (handle_ppc runs first)."""
+    ssp_body = ['SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un']
     if region in ssp_body:
         return 'SSp-body'
     else:
@@ -231,7 +233,8 @@ def handle_mpfc(region, row=None):
 
 def handle_ppc(region, row=None):
     """VISrl -> PPC on every probe (posterior parietal in the Allen CCF 2017). On PPC-targeted probes, PPC subregions and
-    neighbouring areas -> PPC, including SSp-bfd (user 2026-11-17: blurry PPC / barrel-field boundary)."""
+    neighbouring areas -> PPC, including SSp-bfd (user 2026-11-17: blurry PPC / barrel-field boundary) and SSp-tr /
+    SSp-un (user 2026-11-18). Runs before handle_ssp_oro / handle_ssp_body, which would otherwise relabel them first."""
     if region == 'VISrl':
         return 'PPC'
     pcc_areas = ['PTLp', 'VISa', 'SSp-tr', 'SSp-un', 'SSp-bfd']
@@ -276,12 +279,12 @@ def handle_hypothalamus(region, row=None):
 def apply_context_handlers(region, row):
     """Apply the handle_* regroupings (order matters)."""
     region = handle_ssp_bfd(region, row)
+    region = handle_ppc(region, row)  # before oro / body: PPC-probe SSp-tr / SSp-un -> PPC
     region = handle_ssp_oro(region, row)
     region = handle_ssp_body(region, row)
     region = handle_lsf(region, row)
     region = handle_hypothalamus(region, row)
     region = handle_mpfc(region, row)
-    region = handle_ppc(region, row)
     region = handle_v1(region, row)
     region = handle_cortical_subplate(region, row)
     return region
@@ -385,8 +388,8 @@ def get_custom_area_groups():
     area_groups = {
         'Motor areas': ['MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2'],
         'Frontal areas': ['mPFC', 'FRP', 'ACA', 'PL', 'ORB'],
-        'Somatosensory-orofacial': ['SSp-m', 'SSp-n', 'SSp-un', 'SSp-oro'],
-        'Somatosensory-body': ['SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-body'],
+        'Somatosensory-orofacial': ['SSp-m', 'SSp-n', 'SSp-oro'],
+        'Somatosensory-body': ['SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'SSp-body'],
         'Somatosensory-whisker': ['SSp-bfd', 'SSs'],
         'Auditory areas': ['AUD', 'TEa'],
         'Retrosplenial areas': ['RSP'],
