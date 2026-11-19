@@ -368,7 +368,7 @@ def get_target_region_order():
 
 def get_area_acronym_custom_order():
     """Plotting order of area_acronym_custom."""
-    area_order = ['MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2', 'mPFC', 'FRP', 'ACA', 'PL', 'ORB', 'AI',
+    area_order = ['MOp', 'MOs', 'MO-FC', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2', 'mPFC', 'FRP', 'ACA', 'PL', 'ORB', 'AI',
                   'SSp-bfd', 'SSs', 'SSp-m', 'SSp-n', 'SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'VISC', 'GU', 'SSp-oro', 'SSp-body',
                   'AUD', 'TEa', 'PPC', 'V1', 'VIS', 'VISa', 'VISp', 'VISam', 'VISl', 'VISpm', 'VISrl', 'VISal',
                   'CLA', 'EP', 'CTXsp',
@@ -386,7 +386,7 @@ def get_custom_area_groups():
     """Area groups: {group: [area_acronym_custom, ...]}."""
 
     area_groups = {
-        'Motor areas': ['MOp', 'MOs', 'MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2'],
+        'Motor areas': ['MOp', 'MOs','MO-FC',' MO-tjM1', 'MO-ALM', 'MO-wM1', 'MO-wM2'],
         'Frontal areas': ['mPFC', 'FRP', 'ACA', 'PL', 'ORB'],
         'Somatosensory-orofacial': ['SSp-m', 'SSp-n', 'SSp-oro'],
         'Somatosensory-body': ['SSp-ul', 'SSp-ll', 'SSp-tr', 'SSp-un', 'SSp-body'],
