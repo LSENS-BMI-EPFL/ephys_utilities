@@ -637,9 +637,9 @@ def create_areas_subdivisions(df, verbose=False):
     target_region_map = {
         'tjM1': 'MO-tjM1',
         'ALM': 'MO-ALM',
-        # OFC-target probes: their MO units (anterior-medial MOs, mostly momap MO13) are not ALM -> left as MOs/MOp
         'wM1': 'MO-wM1',
-        'wM2': 'MO-wM2'
+        'wM2': 'MO-wM2',
+        'OFC': 'MO-FC' # OFC-target probes: their MO units (anterior-medial MOs, mostly Falasconi et al, 2026 momap MO13,14,16) are not ALM -> left as MOs/MOp
     }
 
     df = df.copy()
