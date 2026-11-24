@@ -302,8 +302,9 @@ def keep_passive_mice(data_df):
                 if int(m[2:]) >= 116:
                     # AB155: joined NWB with passive post since 2026-11-06; its imec4 units are excluded by
                     # keep_passive_units
-                    if m not in ['AB144']:
-                        passive_mouse_ids.append(m)
+                    # AB144 was excluded here (no documented reason; passive pre 72 / active 239 / post 71 trials, normal):
+                    # re-included 2026-11-23 (ibl-ai-agent ssl-hitmiss-axis-passive step-1 reconciliation)
+                    passive_mouse_ids.append(m)
             except ValueError:
                 continue  # skip if name is wrong
         elif m.startswith('MH'):
@@ -313,6 +314,39 @@ def keep_passive_mice(data_df):
 
 
 keep_passive_data = keep_passive_mice
+
+
+def get_passive_epochs(trial_df, rule='mid', drop_licks=True, trial_types=('whisker_trial', 'auditory_trial')):
+    """Passive pre and post trials of ONE session.
+
+    rule='mid' (default; same split as neural_utils' passive PSTHs): every passive trial, pre = before the start time of the
+    session's middle trial (index len // 2 of the time-sorted trial table), post = from it on.
+    rule='blocks': pre = passive trials before the session's first non-passive trial, post = passive trials after the last
+    trial of the longest run of non-passive trials (main active block). Short passive runs interleaved with the first active
+    trials (e.g. AB122_20240804, 17 day-0 sessions with 1-15 such trials) are excluded.
+    drop_licks: drop passive trials with lick_flag == 1 (as get_passive_conditions_fast).
+    Returns (pre_df, post_df), each sorted by start_time. Mouse / unit filters stay in keep_passive_data.
+    (Added 2026-11-24, ibl-ai-agent ssl-hitmiss-axis-passive Figure-4 CD method review.)
+    """
+    t = trial_df.sort_values('start_time').reset_index(drop=True)
+    is_passive = (t['context'].astype(str) == 'passive').to_numpy()
+    passive = t[is_passive & t['trial_type'].isin(trial_types).to_numpy()]
+    if drop_licks and 'lick_flag' in passive.columns:
+        passive = passive[passive['lick_flag'] != 1]
+    if rule == 'mid':
+        mid_time = t['start_time'].values[len(t) // 2]
+        pre, post = passive[passive['start_time'] < mid_time], passive[passive['start_time'] >= mid_time]
+    elif rule == 'blocks':
+        if is_passive.all():
+            return passive.iloc[:0], passive.iloc[:0]
+        block = np.r_[0, np.cumsum(is_passive[1:] != is_passive[:-1])]
+        main_block = pd.Series(block[~is_passive]).value_counts().idxmax()
+        main_end = t['start_time'][block == main_block].max()
+        first_active = t['start_time'][~is_passive].min()
+        pre, post = passive[passive['start_time'] < first_active], passive[passive['start_time'] > main_end]
+    else:
+        raise ValueError(f'unknown rule {rule!r}')
+    return pre.reset_index(drop=True), post.reset_index(drop=True)
 
 
 
