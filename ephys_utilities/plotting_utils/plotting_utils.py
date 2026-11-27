@@ -50,6 +50,7 @@ MO_SUB_AREA_CMAP = { # by target
     'MO-wM1':'#a8e63e',
     'MO-wM2':'#66e85f',
     'MO-tjM1':'#3e9c3a',
+    'MO-FC':'#3e9c3a',   # same as MO-tjM1 (user 2026-11-24)
     'MO-ALM':'#1c451a',
 }
 

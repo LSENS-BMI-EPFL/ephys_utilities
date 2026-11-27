@@ -187,32 +187,65 @@ def keep_active_from_whisker_onset(trial_df):
     df = trial_df.copy()
     print('Getting whisker trial indices...')
 
-    # Find first whisker trial per mouse
-    first_whisker_id = (
-        df[df['trial_type'] == 'whisker_trial']
-        .groupby('mouse_id')['trial_id']
-        .min()
-        .rename('first_whisker_id')
-    )
+    # First whisker trial per mouse AND session (Axel 2026-11-27: session-based analyses; trials of several sessions are
+    # never concatenated). Tables without session_id fall back to per mouse.
+    keys = ['mouse_id', 'session_id'] if 'session_id' in df.columns else ['mouse_id']
+    order = 'start_time' if 'start_time' in df.columns else 'trial_id'  # trial_id restarts in merged sessions
+    df = df.sort_values(keys + [order])
+    first = df[df['trial_type'] == 'whisker_trial'].groupby(keys).head(1).set_index(keys)  # rows sorted by `order`
+    first_whisker = pd.DataFrame({'first_whisker_order': first[order], 'first_whisker_id': first['trial_id']})
 
-    # Merge to get first whisker trial per mouse
-    df = df.merge(first_whisker_id, on='mouse_id', how='left')
+    # Merge to get first whisker trial per mouse and session (sessions without whisker trials are dropped)
+    df = df.merge(first_whisker, left_on=keys, right_index=True, how='inner')
 
     # Keep only trials >= first whisker trial
-    df = df[df['trial_id'] >= df['first_whisker_id']].copy()
+    df = df[df[order] >= df['first_whisker_order']].copy()
     # Reindex trial_id to start at 0 from first whisker trial
     df['trial_id'] = df['trial_id'] - df['first_whisker_id']
 
-    # Define also a whisker_trial_id, just for whisker trials
+    # Define also a whisker_trial_id, just for whisker trials (per mouse and session)
     df['whisker_trial_id'] = np.nan
     whisker_mask = df['trial_type'] == 'whisker_trial'
-    df.loc[whisker_mask, 'whisker_trial_id'] = df.loc[whisker_mask].groupby('mouse_id').cumcount()
+    df.loc[whisker_mask, 'whisker_trial_id'] = df.loc[whisker_mask].groupby(keys).cumcount()
     df['whisker_trial_id'] = df['whisker_trial_id'].astype('Int64')  # keep as nullable integer
 
-    # Drop helper column
-    df.drop(columns='first_whisker_id', inplace=True)
+    # Drop helper columns
+    df.drop(columns=['first_whisker_id', 'first_whisker_order'], inplace=True)
 
     return df
+
+
+def cut_session_end(trial_df, end_fraction=0.10):
+    """
+    Remove the last `end_fraction` of each session's active part, in TIME (start_time, not trial indices; Axel
+    2026-11-27: default for behavioural metrics, mice disengage at the end). Per mouse and session, with t0 / t1 the
+    start times of the first / last active trial (context != 'passive'; the auditory warm-up block before the first
+    whisker trial is included in the duration), trials starting after t0 + (1 - end_fraction) * (t1 - t0) are dropped.
+    Passive trials are dropped. Call it before keep_active_from_whisker_onset and keep_active_trials, so the duration is
+    that of the whole active part.
+    :param trial_df: trial table (start_time, context, mouse_id, session_id)
+    :param end_fraction: fraction of the active-part duration removed at the end (0.10 = last 10%)
+    :return: active trials without the session ends
+    """
+    df = trial_df[~trial_df['context'].isin(['passive'])] if 'context' in trial_df.columns else trial_df
+    keys = ['mouse_id', 'session_id'] if 'session_id' in df.columns else ['mouse_id']
+    g = df.groupby(keys)['start_time']
+    t0, t1 = g.transform('min'), g.transform('max')
+    return df[df['start_time'] <= t0 + (1 - end_fraction) * (t1 - t0)].copy()
+
+
+def select_active_trials(trial_df, end_fraction=0.10):
+    """
+    Default trial selection for active-task metrics (Axel 2026-11-27): per session, the last `end_fraction` of the
+    active part is removed in time (cut_session_end; duration from the first active trial, auditory warm-up included,
+    to the last active trial), then the auditory block before the first whisker trial (keep_active_from_whisker_onset),
+    then excluded trials (keep_active_trials: perf 6, early licks). end_fraction=0 keeps the session end.
+    Sessions without whisker trials are dropped by keep_active_from_whisker_onset.
+    :param trial_df: trial table of one or several sessions
+    :return: selected trials
+    """
+    df = cut_session_end(trial_df, end_fraction) if end_fraction else trial_df
+    return keep_active_trials(keep_active_from_whisker_onset(df))
 
 
 
